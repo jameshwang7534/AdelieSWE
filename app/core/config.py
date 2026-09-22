@@ -1,5 +1,6 @@
 """Centralized environment configuration without import-time side effects."""
 
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -23,6 +24,8 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     database_url: SecretStr | None = None
     redis_url: SecretStr | None = None
+    celery_broker_url: SecretStr | None = None
+    celery_result_backend: SecretStr | None = None
     github_token: SecretStr | None = None
     github_api_url: str = "https://api.github.com"
     llm_api_key: SecretStr | None = None
@@ -31,8 +34,26 @@ class Settings(BaseSettings):
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
     dependency_timeout_seconds: int = Field(default=2, ge=1, le=30)
+    workspace_root: Path = Path("workspaces")
 
-    @field_validator("database_url", "redis_url")
+    @field_validator("github_api_url")
+    @classmethod
+    def validate_github_api_url(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "GITHUB_API_URL must be an HTTPS base URL without credentials or query"
+            )
+        return value
+
+    @field_validator("database_url", "redis_url", "celery_broker_url", "celery_result_backend")
     @classmethod
     def validate_connection_url(cls, value: SecretStr | None) -> SecretStr | None:
         """Validate connection schemes separately below; never echo credentials."""
@@ -49,11 +70,11 @@ class Settings(BaseSettings):
                 raise ValueError("DATABASE_URL must use postgresql+psycopg with a hostname")
         return value
 
-    @field_validator("redis_url")
+    @field_validator("redis_url", "celery_broker_url", "celery_result_backend")
     @classmethod
     def validate_redis_url(cls, value: SecretStr | None) -> SecretStr | None:
         if value is not None:
             parsed = urlsplit(value.get_secret_value())
             if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
-                raise ValueError("REDIS_URL must use redis or rediss with a hostname")
+                raise ValueError("Redis connection URLs must use redis or rediss with a hostname")
         return value

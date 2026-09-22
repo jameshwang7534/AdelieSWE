@@ -1,0 +1,1 @@
+"""Mockable local Git execution."""

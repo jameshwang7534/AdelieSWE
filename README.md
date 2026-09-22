@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: Minimal FastAPI application, configuration, local infrastructure, and initial PostgreSQL persistence available.** The API provides liveness and PostgreSQL/Redis readiness checks. Nine SQLAlchemy models, transactional sessions, and an Alembic migration define the initial data layer. Agents, indexing, GitHub/LLM calls, and the issue-to-pull-request workflow remain PLANNED.
+> **Status: Minimal API, persistence, Celery tasks, GitHub imports, and local workspaces available.** The API provides health/readiness, diagnostic tasks, and repository/issue imports. Workers can prepare registered repository checkouts. Agents, indexing, LLM calls, and the issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -111,7 +111,7 @@ pgvector is enabled as an extension within local PostgreSQL, not as a separate d
 
 ## Project directory structure
 
-The following structure exists. Most component packages remain placeholders; API health checks, configuration, and database persistence are implemented. `.gitkeep` files preserve empty directories in Git.
+The following structure exists. Most component packages remain placeholders; health checks, configuration, persistence, diagnostic workers, and repository/issue imports are implemented. `.gitkeep` files preserve empty directories in Git.
 
 ```text
 .
@@ -133,7 +133,9 @@ The following structure exists. Most component packages remain placeholders; API
 │   ├── __init__.py
 │   ├── main.py              # FastAPI factory and lifespan
 │   ├── api/
-│   │   └── status.py        # /health and /ready with response schemas
+│   │   ├── status.py        # /health and /ready with response schemas
+│   │   ├── tasks.py         # Diagnostic task submission/status
+│   │   └── repositories.py  # Repository and issue import/read routes
 │   ├── core/
 │   │   └── config.py        # Centralized pydantic-settings configuration
 │   ├── db/
@@ -144,26 +146,38 @@ The following structure exists. Most component packages remain placeholders; API
 │   │   ├── planning.py     # ImplementationPlan, PlanTask
 │   │   └── execution.py    # ExecutionRun, TaskExecution, AgentRun, PullRequest
 │   ├── schemas/
+│   │   ├── tasks.py         # Diagnostic task response contracts
+│   │   └── repositories.py  # Repository and issue response contracts
 │   ├── services/
-│   │   └── readiness.py     # Mockable dependency probes and resource cleanup
+│   │   ├── readiness.py     # Mockable dependency probes and resource cleanup
+│   │   ├── task_queue.py    # Mockable queue interface and Celery adapter
+│   │   ├── repositories.py  # Transactional repository/issue imports
+│   │   └── github_resources.py # Lifespan-owned HTTP and database resources
 │   ├── integrations/
 │   │   ├── github/
+│   │   │   └── client.py    # GitHubClient protocol and httpx adapter
 │   │   └── llm/
 │   ├── indexing/
 │   ├── retrieval/
 │   ├── agents/
 │   ├── orchestration/
 │   ├── workers/
+│   │   ├── celery_app.py    # Worker CLI entry point
+│   │   ├── factory.py       # Settings-backed Celery configuration
+│   │   └── tasks.py         # system.ping only
 │   ├── sandbox/
 │   └── pull_requests/
 ├── tests/
 │   ├── unit/
 │   │   ├── test_imports.py
 │   │   ├── test_application.py
-│   │   └── test_session.py
+│   │   ├── test_session.py
+│   │   ├── test_workers.py
+│   │   └── test_github.py
 │   └── integration/
 │       ├── test_database.py # Isolated PostgreSQL migration/ORM tests
-│       └── test_infrastructure.py  # Opt-in checks against running services
+│       ├── test_infrastructure.py  # Opt-in checks against running services
+│       └── test_worker.py   # Opt-in real Redis/Celery/API test
 ├── scripts/                 # Empty
 └── docs/                    # Empty
 ```
@@ -176,8 +190,8 @@ The phases below indicate intended sequencing, not completed capabilities or per
 
 1. **Project documentation:** initial README available.
 2. **Backend foundation:** Python 3.12 scaffold, typed settings, minimal FastAPI endpoints, lifespan management, and automated tests/lint/type checks are available. Broader application behavior remains planned.
-3. **Persistence and background execution (partial):** local PostgreSQL 16/pgvector and Redis, nine database models, session management, and the initial migration are available. Celery execution remains planned.
-4. **Repository access:** add a mockable GitHub integration and controlled repository acquisition.
+3. **Persistence and background execution (partial):** local PostgreSQL/pgvector and Redis, nine models, migrations, and Celery diagnostic execution are available. Business task execution remains planned.
+4. **Repository access:** mockable GitHub REST adapter, repository/issue imports, and managed repository checkout are available.
 5. **Indexing and retrieval:** implement repository indexing, BM25, embeddings, pgvector queries, and hybrid retrieval evaluation.
 6. **Planning and orchestration:** implement dependency-aware plans, persisted task state, and worker dispatch.
 7. **Coding and isolated validation:** add coding/test agents and the Docker sandbox execution interface.
@@ -222,7 +236,7 @@ The import smoke test exercises the scaffold packages without credentials or run
 
 The default test run skips opt-in infrastructure tests; unit tests use isolated settings and mockable dependency probes without `.env`, Docker, services, or API keys. Compose consumes infrastructure settings and the application loads its configuration using pydantic-settings. Future generated repository checkouts should live under the ignored `workspaces/` directory; any alternative location will need its own exclusion policy.
 
-**PLANNED:** business API routes, workers, indexing, and GitHub/LLM integrations. PostgreSQL and Redis probes already have injectable interfaces; no GitHub or LLM calls are made.
+**PLANNED:** further business routes, indexing/agent tasks, and LLM integrations. Dependency probes, queues, GitHub HTTP access, and Git execution have injectable interfaces. Import routes read GitHub metadata; workspace tasks clone/fetch registered repositories. No LLM calls are made.
 
 ## Minimal API
 
@@ -251,6 +265,176 @@ Settings load once per application factory call, using constructor overrides, en
 Lifespan creates lazy clients and closes them on shutdown or partial startup failure. Service outages do not prevent startup. `/ready` performs PostgreSQL `SELECT 1` and Redis `PING` in FastAPI's worker thread pool, with configurable connection/socket/pool/statement timeouts and no Redis retries. These are per-operation timeouts, not a strict total request deadline. Failures return sanitized status and log only the dependency name; subsequent requests retry the checks. `LOG_LEVEL` controls the `app` logger; uvicorn retains its own logging configuration.
 
 `DATABASE_URL` requires the installed SQLAlchemy driver scheme `postgresql+psycopg://`; Redis accepts `redis://` or `rediss://`. Optional GitHub/LLM settings are stored only. `EMBEDDING_DIM` defaults to 1536; the initial persistence schema fixes the vector column at 1536 dimensions. Changing the setting does not alter the database; a new migration is required to resize stored embeddings. No embedding model or generation is implemented.
+
+## Celery diagnostic worker
+
+Configure `CELERY_BROKER_URL` and `CELERY_RESULT_BACKEND` using the local samples in `.env.example`, through the shell or your ignored `.env`. They use Redis databases 1 and 2; `REDIS_URL` remains database 0 for readiness. The worker and API must use the same broker and result backend. Future containers on the Compose network use `redis:6379` instead of `127.0.0.1`. Compose still runs infrastructure only.
+
+Start Redis with `docker compose up -d --wait`, then open a separate terminal at the repository root. For the Windows development smoke test:
+
+```powershell
+.\.venv\Scripts\python.exe -m celery -A app.workers.celery_app:app worker --pool=solo --concurrency=1 --queues=orchestration,indexing,agents --loglevel=INFO
+```
+
+The worker should list `system.ping` and `repository.prepare_workspace`, then report `ready`. Stop it with Ctrl+C. Windows/`solo` is a development smoke-test arrangement, not a parallel production worker: `solo` runs one task at a time and does not enforce prefork task time limits. For Linux workers with process-based concurrency, use `--pool=prefork --concurrency=2` instead. See the [Celery concurrency documentation](https://docs.celeryq.dev/en/latest/userguide/concurrency/).
+
+Start FastAPI in another terminal using the command above, then submit and inspect a task:
+
+```powershell
+$task = Invoke-RestMethod -Method Post http://127.0.0.1:8000/tasks/ping
+Invoke-RestMethod "http://127.0.0.1:8000/tasks/$($task.task_id)"
+```
+
+`POST /tasks/ping` returns HTTP 202 with a UUID `task_id`, `task_name: "system.ping"`, and `status: "queued"`. Poll `GET /tasks/{task_id}` for `state: "SUCCESS"` and `result` containing the task ID/name, worker, queue, retry count, UTC completion time, and `status: "ok"`. Submission confirms publication, not worker completion. The API never waits for execution.
+
+Queue configuration is explicit: diagnostic and workspace tasks route to `orchestration`; `indexing` and `agents` remain reserved. Only JSON messages/results are accepted. Diagnostic limits are 20 seconds soft and 30 seconds hard; workspace limits are 900/960 seconds. Redis visibility timeout is one hour. Prefetch is 1, results expire after one hour, broker/backend retries are bounded, and diagnostic connection/timeout retries use backoff and jitter (maximum 3). Workspace tasks are not automatically retried. `LOG_LEVEL` provides the worker default; CLI `--loglevel` overrides it. Worker imports create no database engines or connections.
+
+Missing Celery URLs leave the health endpoints available but make `/tasks` return HTTP 503. Broker/backend failures also return sanitized 503 responses; task failures are reported through `state` without raw exceptions. Unknown, expired, and queued task IDs may all appear as `PENDING`: this step does not persist a submission registry or promise 404 for unknown UUIDs. A failed publish response can be ambiguous; retrying submission may enqueue another task. These local diagnostic endpoints have no authentication yet and should remain bound to localhost. `/ready` checks PostgreSQL and Redis, not worker availability.
+
+Unit tests use injected queues and direct/eager task execution, without Redis. To exercise an actual Celery `solo` worker over Redis, configure both Celery URLs and run:
+
+```powershell
+$env:RUN_WORKER_TESTS = '1'
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_worker.py -v
+Remove-Item Env:RUN_WORKER_TESTS
+```
+
+The integration test starts/stops a test worker, uses a unique queue, submits through FastAPI, and polls the shared Redis result backend. It removes its result and queue afterward. Do not run a separate worker for this test. No PostgreSQL data, indexing jobs, or agent behavior are involved.
+
+## GitHub repository and issue imports
+
+The API can register repository metadata and import a single GitHub issue into PostgreSQL.
+Apply `alembic upgrade head` using the existing database setup, then start the API as above.
+No new migration is needed. These endpoints do not clone, index, run agents, or write to GitHub.
+
+| Endpoint | Behavior |
+| --- | --- |
+| `POST /repositories` | JSON `{ "github_owner": "OWNER", "github_name": "REPOSITORY" }`; fetch canonical GitHub metadata and upsert locally |
+| `POST /repositories/{repository_id}/issues/{issue_number}/import` | Fetch and upsert one issue for the registered repository |
+| `GET /repositories/{repository_id}` | Read locally stored metadata without contacting GitHub |
+| `GET /issues/{issue_id}` | Read the locally stored issue without contacting GitHub |
+
+Success returns HTTP 200 and structured records with UUIDs and UTC timestamps. Repeat imports
+preserve IDs and refresh metadata; repository identity is case-insensitive and issue numbers
+are unique within a repository. Import preserves local/index status. Creation timestamps are
+local record timestamps, not GitHub creation times. GitHub pull requests are rejected as issue
+imports with HTTP 422.
+
+In Swagger at `/docs`, register a repository you can access, copy its returned `id`, and use
+that ID with a positive issue number in the import endpoint. Use the returned issue `id` in
+`GET /issues/{issue_id}` to verify persistence. Invalid inputs return 422; unknown local IDs
+return 404. Start PostgreSQL and apply migrations before using these routes.
+
+`GitHubClient` defines the integration boundary; `HttpGitHubClient` contains all GitHub HTTP
+operations. The lifespan owns the HTTP pool and lazy database engine. Each operation uses
+short transactions that commit or roll back and close. GitHub reads finish before write
+transactions. Tests use `httpx.MockTransport`, including imports into an isolated real PostgreSQL
+test database. Unit tests need neither tokens nor running services.
+
+The adapter also supplies branch SHA lookup, branch creation, and PR creation/retrieval for
+later steps. These have mocked contract tests, with no public write endpoints or workflow
+callers. File updates and issue listing are deferred until a workflow requires them.
+
+Errors return `detail.code`, never upstream bodies, tokens, or database details:
+
+| Condition | HTTP / code |
+| --- | --- |
+| GitHub rejects authentication | 401 / `github_unauthorized` |
+| GitHub permission denied | 403 / `github_forbidden` |
+| GitHub missing/inaccessible resource | 404 / `github_not_found` |
+| Primary/secondary GitHub rate limit | 429 / `github_rate_limited`, with `Retry-After` |
+| Network failure/timeout | 503 / `github_unavailable` |
+| Other upstream error, redirect, or malformed payload | 502 / `github_response_error` or `github_invalid_response` |
+| Missing/unavailable database | 503 / `database_unconfigured` or `database_unavailable` |
+
+Rate-limit responses use GitHub's retry delay or reset timestamp, falling back to 60 seconds.
+Requests are not automatically replayed, especially writes; callers must respect the returned
+wait time. See [GitHub rate-limit guidance](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+Redirects are not followed; submit the canonical identity when a repository has moved.
+`GITHUB_API_URL` defaults to `https://api.github.com`; an Enterprise HTTPS base URL ending in
+`/api/v3` is supported. Only trusted operator configuration sets this URL; requests cannot choose
+a host. The base URL must not contain credentials, queries, or fragments.
+
+`GITHUB_TOKEN` is optional for public repository reads. Automated tests make no real GitHub
+requests. For optional private-repository testing, create a fine-grained token under GitHub
+**Settings → Developer settings → Personal access tokens**, select only the intended repository,
+and grant **Metadata: read** and **Issues: read**, with organization approval if required.
+Store it locally in `GITHUB_TOKEN` through the ignored `.env` or shell, then restart the API.
+Never paste it into chat. Verify through `/docs`: repository and issue imports should return
+HTTP 200 with local UUIDs and matching metadata. No write permissions are needed for these
+endpoints. Local API authentication remains planned; keep the API bound to loopback because
+imported private issue content is accessible through local reads.
+
+## Repository workspaces
+
+`WorkspaceService` manages disposable local copies; it does not index code or execute repository
+programs. Git must be installed on the worker host (`git --version`). The default `WORKSPACE_ROOT`
+is `workspaces`, resolved relative to the worker's working directory. Use the same absolute root
+when several worker processes share a filesystem. Existing `.gitignore` rules exclude the default
+directories; the service also creates a local ignore-all file inside a new custom root.
+
+Paths use UUIDs, never repository names or request-supplied path components:
+
+```text
+WORKSPACE_ROOT/
+  repositories/<repository UUID>/
+  executions/<repository UUID>/<execution UUID>/
+  locks/<repository UUID>.lock
+```
+
+`prepare` clones a repository or fetches updates, checks out its registered default branch, resets
+to the remote commit, and removes tracked modifications plus untracked/ignored files. These are
+disposable workspaces: do not keep user work in them. `reset` accepts an existing full commit SHA.
+`create_execution` makes an independent detached clone at the prepared commit, with no shared
+object store or remote. Existing execution IDs are rejected rather than overwritten. A result
+contains the local path and exact commit SHA. Git integrity checks run before/after preparation.
+
+The Git adapter runs argument lists without a shell, disables hooks, credential helpers, redirects,
+and interactive prompts, and limits each command to 120 seconds. Production cloning accepts HTTPS
+only for the configured GitHub host (`github.com`, or the host in Enterprise `GITHUB_API_URL`).
+Tokens never enter clone URLs, Git configuration, task arguments, or logs. The askpass helper receives
+`GITHUB_TOKEN` only through the Git subprocess environment. Execution clones receive no token.
+Local filesystem remotes are an explicit test-only injection option, not a settings switch.
+
+Per-repository exclusive lock files serialize changes on one filesystem. UUID validation and
+containment checks reject symlinks/junctions in managed paths. The root must be writable only by
+trusted platform processes; these checks and isolated copies are not a sandbox against hostile
+processes with access to the same files. Symlinks in repository content are checked out as ordinary
+files. Submodules and Git LFS downloads are not prepared. Empty repositories without a commit cannot
+be prepared. Full clones/integrity checks can be expensive for large repositories.
+
+With PostgreSQL/Redis running and the worker started as above, enqueue a registered repository
+from a local Python shell (replace the UUID placeholder):
+
+```python
+from app.workers.celery_app import app
+
+task = app.send_task("repository.prepare_workspace", args=["REGISTERED_REPOSITORY_UUID"])
+print(task.id)
+print(task.state)
+```
+
+Poll the same task with `app.AsyncResult(task_id).state`; after `SUCCESS`, `.result` contains
+`repository_id`, `status: ready`, and `commit`. The `/tasks` HTTP endpoints remain diagnostic-only
+and must not be used to inspect workspace results. `GET /repositories/{id}` shows persisted
+`local_status`: `pending`, `syncing`, `ready`, or `error`. Sync invalidates `index_status` to `pending`;
+no indexing is performed. No migration or new HTTP endpoint is needed. Database resources are
+created inside task execution and always disposed. Failures surface sanitized Celery errors.
+
+A worker crash/hard timeout may leave `syncing`, a lock, or a `.partial-*` directory. After confirming
+no worker/Git process owns that repository, an operator may remove only that lock/partial directory
+under the configured root and resubmit. There is no automatic stale-lock deletion, disk quota, or
+workspace garbage collector in this step. Workers on unrelated filesystems have separate copies;
+distributed host ownership and stale-worker recovery remain future orchestration concerns.
+
+Local tests use temporary Git repositories and synthetic credentials; no GitHub token is required.
+For optional private clone testing, a fine-grained `GITHUB_TOKEN` additionally needs **Contents: read**
+for the registered repository, alongside the metadata/issue read permissions above. Configure it
+only locally and restart the worker. Enqueue the task and expect `SUCCESS`, `status: ready`, and a
+commit SHA; never paste the token into chat.
+
+Implementation modules: `app/services/workspace.py`, `app/services/workspace_sync.py`,
+`app/integrations/git/runner.py`, `app/integrations/git/askpass.py`, and `app/workers/workspaces.py`.
 
 ## PostgreSQL persistence
 
@@ -347,7 +531,7 @@ If host ports are occupied, set unused `POSTGRES_PORT` / `REDIS_PORT` values loc
 
 ## Environment variables
 
-Compose consumes the five infrastructure variables below. Settings consumes the API fields, connection URLs, optional GitHub/LLM fields, and embedding model/dimension. Celery, provider selection, sandbox, and workspace placeholders remain unused. No real credentials are included.
+Compose consumes the five infrastructure variables below. Settings consumes API fields, PostgreSQL/Redis/Celery URLs, optional GitHub/LLM fields, and embedding model/dimension. Provider selection, sandbox, and workspace placeholders remain unused. No real credentials are included.
 
 | Variable name | Intended purpose |
 | --- | --- |
@@ -377,7 +561,8 @@ Compose consumes the five infrastructure variables below. Settings consumes the 
 | `EMBEDDING_API_KEY` | Embedding provider credential, if separately required |
 | `EMBEDDING_MODEL` | Model identifier for code embeddings |
 | `EMBEDDING_DIM` | Embedding dimension; initial schema uses 1536, resizing requires migration |
-| `REPOSITORY_WORKSPACE_ROOT` | Configurable root for controlled checkouts |
+| `REPOSITORY_WORKSPACE_ROOT` | Legacy unused placeholder; use `WORKSPACE_ROOT` |
+| `WORKSPACE_ROOT` | Active managed checkout root; defaults to `workspaces`. The older `REPOSITORY_WORKSPACE_ROOT` placeholder remains unused. |
 | `SANDBOX_IMAGE` | Approved container image for validation |
 | `SANDBOX_TIMEOUT_SECONDS` | Maximum duration of a sandbox execution |
 | `SANDBOX_MEMORY_LIMIT` | Container memory limit |
@@ -388,9 +573,10 @@ Credential values must be supplied locally through the appropriate environment v
 
 ## Current project status
 
-- **Present:** Python 3.12 scaffold, settings, FastAPI health/readiness, local infrastructure, nine SQLAlchemy models, transactional sessions, the initial Alembic migration, unit tests, and opt-in PostgreSQL/infrastructure tests.
-- **PLANNED:** business APIs, agents, indexing/retrieval, queues, GitHub/LLM integrations, sandbox execution, and pull request generation.
-- **Not yet created:** business logic, GitHub/LLM integration implementations, and application containers.
+- **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
+- **Present:** managed Git checkout/update/reset, independent execution copies, and the Celery workspace preparation task. Indexing remains pending.
+- **PLANNED:** further business APIs, agents, indexing/retrieval, orchestration, LLM integrations, sandbox execution, and pull request workflows.
+- **Not yet created:** agent/orchestration business logic, LLM integration implementations, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.
