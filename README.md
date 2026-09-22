@@ -1,10 +1,10 @@
 # AI Software Engineering Platform
 
-> **Status: Python 3.12 scaffold and local infrastructure available; platform functionality PLANNED.** Development checks and Docker Compose services for PostgreSQL 16 with pgvector and Redis exist. No API application, agents, or platform integrations have been implemented. The workflows and architecture below describe the intended system.
+> **Status: Minimal FastAPI application, configuration, local infrastructure, and initial PostgreSQL persistence available.** The API provides liveness and PostgreSQL/Redis readiness checks. Nine SQLAlchemy models, transactional sessions, and an Alembic migration define the initial data layer. Agents, indexing, GitHub/LLM calls, and the issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
-**The first version is planned to be backend/API focused.** FastAPI-generated Swagger UI and OpenAPI documentation will provide the API exploration interface; a frontend will not be required.
+**The first version is backend/API focused.** FastAPI-generated Swagger UI and OpenAPI documentation provide the API exploration interface; a frontend is not required.
 
 ## Core goals — PLANNED
 
@@ -45,7 +45,7 @@ An AI-powered, multi-agent software engineering platform intended to turn GitHub
 
 ## Planned architecture
 
-This diagram describes the planned platform. Local PostgreSQL/pgvector and Redis infrastructure exists; application components and their connections remain planned.
+This diagram describes the planned platform. The minimal API and local PostgreSQL/pgvector and Redis infrastructure exist; orchestration, agents, retrieval, and external platform integrations remain planned.
 
 ```mermaid
 flowchart TD
@@ -111,7 +111,7 @@ pgvector is enabled as an extension within local PostgreSQL, not as a separate d
 
 ## Project directory structure
 
-The following scaffold exists. Package initializers contain docstrings only; component responsibilities remain planned. `.gitkeep` files preserve empty directories in Git.
+The following structure exists. Most component packages remain placeholders; API health checks, configuration, and database persistence are implemented. `.gitkeep` files preserve empty directories in Git.
 
 ```text
 .
@@ -119,18 +119,33 @@ The following scaffold exists. Package initializers contain docstrings only; com
 ├── .gitignore
 ├── .env.example              # Development defaults and future placeholders
 ├── compose.yaml              # PostgreSQL/pgvector and Redis only
+├── alembic.ini               # Migration configuration; no credentials
+├── migrations/
+│   ├── env.py                # Settings-backed migration runner
+│   ├── script.py.mako
+│   └── versions/
+│       └── 0001_initial_persistence_schema.py
 ├── docker/
 │   └── postgres/
 │       └── init.sql          # Enables vector in a new database
 ├── pyproject.toml            # Python 3.12, dependencies, test/lint/type settings
 ├── app/                     # Installable application package
 │   ├── __init__.py
+│   ├── main.py              # FastAPI factory and lifespan
 │   ├── api/
+│   │   └── status.py        # /health and /ready with response schemas
 │   ├── core/
+│   │   └── config.py        # Centralized pydantic-settings configuration
 │   ├── db/
+│   │   ├── base.py          # UUID and timestamp conventions
+│   │   └── session.py       # Engine and transactional sessions
 │   ├── models/
+│   │   ├── repository.py   # Repository, Issue, CodeChunk
+│   │   ├── planning.py     # ImplementationPlan, PlanTask
+│   │   └── execution.py    # ExecutionRun, TaskExecution, AgentRun, PullRequest
 │   ├── schemas/
 │   ├── services/
+│   │   └── readiness.py     # Mockable dependency probes and resource cleanup
 │   ├── integrations/
 │   │   ├── github/
 │   │   └── llm/
@@ -143,22 +158,25 @@ The following scaffold exists. Package initializers contain docstrings only; com
 │   └── pull_requests/
 ├── tests/
 │   ├── unit/
-│   │   └── test_imports.py
+│   │   ├── test_imports.py
+│   │   ├── test_application.py
+│   │   └── test_session.py
 │   └── integration/
+│       ├── test_database.py # Isolated PostgreSQL migration/ORM tests
 │       └── test_infrastructure.py  # Opt-in checks against running services
 ├── scripts/                 # Empty
 └── docs/                    # Empty
 ```
 
-Each directory under `app/` contains an `__init__.py`. Database migrations and application containers remain planned. Compose currently runs only PostgreSQL/pgvector and Redis.
+Each directory under `app/` contains an `__init__.py`. The initial database migration is available; application containers remain planned. Compose currently runs only PostgreSQL/pgvector and Redis.
 
 ## Development roadmap — PLANNED
 
 The phases below indicate intended sequencing, not completed capabilities or permission to implement additional steps.
 
 1. **Project documentation:** initial README available.
-2. **Backend foundation (partial):** Python 3.12 scaffold, dependency declarations, and automated import/lint/type checks are available. A FastAPI application, typed settings, and logging remain planned.
-3. **Persistence and background execution (partial):** local PostgreSQL 16/pgvector and Redis Compose services are available. Database models, migrations, and Celery execution remain planned.
+2. **Backend foundation:** Python 3.12 scaffold, typed settings, minimal FastAPI endpoints, lifespan management, and automated tests/lint/type checks are available. Broader application behavior remains planned.
+3. **Persistence and background execution (partial):** local PostgreSQL 16/pgvector and Redis, nine database models, session management, and the initial migration are available. Celery execution remains planned.
 4. **Repository access:** add a mockable GitHub integration and controlled repository acquisition.
 5. **Indexing and retrieval:** implement repository indexing, BM25, embeddings, pgvector queries, and hybrid retrieval evaluation.
 6. **Planning and orchestration:** implement dependency-aware plans, persisted task state, and worker dispatch.
@@ -202,9 +220,78 @@ On POSIX systems, create the environment with `python3.12 -m venv .venv` and use
 
 The import smoke test exercises the scaffold packages without credentials or running services. Ruff checks formatting, imports, and common Python errors; mypy uses strict checking for application packages and tests. Dependency ranges are declared, but a reproducible lockfile is not yet provided.
 
-The default test run skips opt-in infrastructure tests; no `.env`, Docker, running service, or API key is required for the import tests. Compose consumes infrastructure settings; Python application settings are not implemented yet. Future generated repository checkouts should live under the ignored `workspaces/` directory; any alternative location will need its own exclusion policy.
+The default test run skips opt-in infrastructure tests; unit tests use isolated settings and mockable dependency probes without `.env`, Docker, services, or API keys. Compose consumes infrastructure settings and the application loads its configuration using pydantic-settings. Future generated repository checkouts should live under the ignored `workspaces/` directory; any alternative location will need its own exclusion policy.
 
-**PLANNED:** database migrations, API routes, workers, and platform integration tests. There is no server entry point or runnable Swagger UI yet. The first version will use FastAPI Swagger/OpenAPI documentation without requiring a frontend. External-service interfaces and test doubles will be introduced alongside the corresponding integrations.
+**PLANNED:** business API routes, workers, indexing, and GitHub/LLM integrations. PostgreSQL and Redis probes already have injectable interfaces; no GitHub or LLM calls are made.
+
+## Minimal API
+
+Start the API from the repository root (no secrets are required for startup or liveness):
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 8000
+```
+
+Swagger UI is at `http://127.0.0.1:8000/docs` and the OpenAPI schema is at `http://127.0.0.1:8000/openapi.json`.
+
+| Endpoint | Success | Dependency unavailable or unconfigured |
+| --- | --- | --- |
+| `GET /health` | HTTP 200, `{"status":"ok"}` | Still HTTP 200; no dependency calls |
+| `GET /ready` | HTTP 200, `{"status":"ready","dependencies":{"postgres":{"status":"ok"},"redis":{"status":"ok"}}}` | HTTP 503, `status: "not_ready"`; each dependency reports `ok`, `error`, or `unconfigured` |
+
+To make readiness succeed, start Compose as described below and provide matching `DATABASE_URL` and `REDIS_URL` through environment variables or a local `.env` copied from `.env.example`. No `.env` is required for the process to start; missing URLs produce explicit `unconfigured` readiness results. Do not overwrite an existing `.env`.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8000/ready
+```
+
+Settings load once per application factory call, using constructor overrides, environment variables, then `.env` in the current working directory, then defaults. Environment names are case-insensitive; empty environment/file values use defaults. Unrelated `.env` fields are ignored so Compose and the API can share a file. Restart the API after changing settings. Tokens, keys, and connection URLs use `SecretStr`; do not explicitly unwrap or log them.
+
+Lifespan creates lazy clients and closes them on shutdown or partial startup failure. Service outages do not prevent startup. `/ready` performs PostgreSQL `SELECT 1` and Redis `PING` in FastAPI's worker thread pool, with configurable connection/socket/pool/statement timeouts and no Redis retries. These are per-operation timeouts, not a strict total request deadline. Failures return sanitized status and log only the dependency name; subsequent requests retry the checks. `LOG_LEVEL` controls the `app` logger; uvicorn retains its own logging configuration.
+
+`DATABASE_URL` requires the installed SQLAlchemy driver scheme `postgresql+psycopg://`; Redis accepts `redis://` or `rediss://`. Optional GitHub/LLM settings are stored only. `EMBEDDING_DIM` defaults to 1536; the initial persistence schema fixes the vector column at 1536 dimensions. Changing the setting does not alter the database; a new migration is required to resize stored embeddings. No embedding model or generation is implemented.
+
+## PostgreSQL persistence
+
+Install the current dependencies with `python -m pip install -e ".[dev]"` in the virtual environment. Provide `DATABASE_URL` through the environment or a local `.env` based on `.env.example`, then start local infrastructure and run:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m alembic current
+.\.venv\Scripts\python.exe -m alembic check
+```
+
+Expected: revision `0001 (head)` and no new upgrade operations. Migrations are explicit; API startup does not modify the schema. Alembic uses the centralized Settings object and enables `vector` with `CREATE EXTENSION IF NOT EXISTS`, even on a database not initialized by Docker's SQL script. The database role must be allowed to create tables, functions, and the extension. No credentials are stored in `alembic.ini`.
+
+| Model | Persisted role and relationships |
+| --- | --- |
+| Repository | GitHub identity, clone URL, default branch, separate local/index status |
+| Issue | Repository FK, repository-scoped GitHub issue number, issue content and state |
+| CodeChunk | Repository FK, file/line range, content/hash, nullable `vector(1536)` |
+| ImplementationPlan | Issue FK, status and summary |
+| PlanTask | Plan FK, plan-scoped task key, JSONB dependency keys/target paths, sequence |
+| ExecutionRun | Plan FK, status, optional branch and execution times |
+| TaskExecution | Run/task FKs, positive attempt, status and output summary |
+| AgentRun | Run FK, optional task-execution FK, agent/model, JSONB metadata, optional tokens and USD cost |
+| PullRequest | Run FK (one PR per run), positive GitHub PR number, URL and status |
+
+Every record has a UUID primary key and timezone-aware `created_at`/`updated_at` columns. UUIDs and creation timestamps have database defaults; update triggers refresh `updated_at` for ORM and raw SQL writes. Foreign keys prevent orphaned records and parent deletion while dependents remain. Uniqueness constraints cover case-insensitive GitHub repository identity, repository issue numbers, plan task keys, and per-run/task attempts. Costs use decimal precision, not floats.
+
+Status columns are strings with initial defaults, not implemented state machines. Task dependency keys are stored as JSONB arrays; dependency resolution, cycle checks, cross-plan execution consistency, and scheduling are future service concerns. JSONB lists/dicts track top-level in-place edits; replace nested values to persist nested edits reliably. No retrieval indexes or embedding generation are introduced.
+
+Use `create_database_engine(Settings())`, `create_session_factory(engine)`, and `with session_scope(factory) as session:` from `app.db.session`. Sessions commit on success, roll back on exceptions, and always close. Engines are caller-owned and must be disposed on shutdown. No global session or speculative CRUD/repository service is added; no business endpoints use sessions yet. Apply Alembic migrations rather than `Base.metadata.create_all()` so database triggers and extensions are included.
+
+Database tests are opt-in and require `TEST_DATABASE_URL` pointing to a local PostgreSQL server where the role has `CREATEDB` and extension privileges. The tests create a uniquely named temporary database, migrate it, verify round trips/constraints/rollback and downgrade/upgrade, then drop only that temporary database. They do not downgrade or erase the development database.
+
+```powershell
+# Set TEST_DATABASE_URL locally to your development PostgreSQL URL first.
+$env:RUN_DATABASE_TESTS = '1'
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_database.py -v
+Remove-Item Env:RUN_DATABASE_TESTS
+```
+
+`TEST_DATABASE_URL` must be a shell environment variable for the tests (it is not automatically loaded from `.env`). Unit tests still require no database. `alembic downgrade base` removes the application tables and their data; use it only on disposable databases. Downgrade retains the pgvector extension because other schemas may depend on it.
 
 ## Local infrastructure
 
@@ -260,7 +347,7 @@ If host ports are occupied, set unused `POSTGRES_PORT` / `REDIS_PORT` values loc
 
 ## Environment variables
 
-Compose currently consumes the five infrastructure variables below, with development defaults. URL samples are provided for future application clients; all other application settings remain provisional and unused. No real credentials are included.
+Compose consumes the five infrastructure variables below. Settings consumes the API fields, connection URLs, optional GitHub/LLM fields, and embedding model/dimension. Celery, provider selection, sandbox, and workspace placeholders remain unused. No real credentials are included.
 
 | Variable name | Intended purpose |
 | --- | --- |
@@ -270,10 +357,13 @@ Compose currently consumes the five infrastructure variables below, with develop
 | `POSTGRES_PORT` | Loopback host port; defaults to `5432` |
 | `REDIS_PORT` | Loopback host port; defaults to `6379` |
 | `APP_ENV` | Runtime environment selection |
+| `APP_NAME` | FastAPI title; defaults to AI Software Engineering Platform |
 | `LOG_LEVEL` | Application logging verbosity |
+| `DEPENDENCY_TIMEOUT_SECONDS` | Per-operation dependency timeout; integer 1–30, default 2 |
 | `API_HOST` | API bind address |
 | `API_PORT` | API listening port |
 | `DATABASE_URL` | PostgreSQL connection configuration; may contain credentials |
+| `TEST_DATABASE_URL` | Opt-in test server URL; requires temporary database creation privileges |
 | `REDIS_URL` | Redis connection configuration; may contain credentials |
 | `CELERY_BROKER_URL` | Celery broker connection configuration |
 | `CELERY_RESULT_BACKEND` | Celery result backend configuration, if used |
@@ -286,6 +376,7 @@ Compose currently consumes the five infrastructure variables below, with develop
 | `EMBEDDING_PROVIDER` | Selected embedding provider adapter |
 | `EMBEDDING_API_KEY` | Embedding provider credential, if separately required |
 | `EMBEDDING_MODEL` | Model identifier for code embeddings |
+| `EMBEDDING_DIM` | Embedding dimension; initial schema uses 1536, resizing requires migration |
 | `REPOSITORY_WORKSPACE_ROOT` | Configurable root for controlled checkouts |
 | `SANDBOX_IMAGE` | Approved container image for validation |
 | `SANDBOX_TIMEOUT_SECONDS` | Maximum duration of a sandbox execution |
@@ -297,9 +388,9 @@ Credential values must be supplied locally through the appropriate environment v
 
 ## Current project status
 
-- **Present:** README, Python 3.12 package scaffold, dependency/tool configuration, `.gitignore`, development `.env.example`, package-import tests, PostgreSQL/pgvector and Redis Compose infrastructure, and opt-in infrastructure tests.
-- **PLANNED:** all application functionality, APIs, agents, retrieval, database schemas, queues, external integrations, sandbox execution, and pull request generation.
-- **Not yet created:** API application, business logic, platform integration implementations/tests, migrations, and application containers.
+- **Present:** Python 3.12 scaffold, settings, FastAPI health/readiness, local infrastructure, nine SQLAlchemy models, transactional sessions, the initial Alembic migration, unit tests, and opt-in PostgreSQL/infrastructure tests.
+- **PLANNED:** business APIs, agents, indexing/retrieval, queues, GitHub/LLM integrations, sandbox execution, and pull request generation.
+- **Not yet created:** business logic, GitHub/LLM integration implementations, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.
