@@ -4,6 +4,8 @@ from celery import Celery
 from kombu import Queue
 
 from app.core.config import Settings
+from app.workers.embeddings import EMBED_TASK_NAME, embed_code
+from app.workers.indexing import INDEX_TASK_NAME, index_code
 from app.workers.tasks import PING_TASK_NAME, ping
 from app.workers.workspaces import PREPARE_TASK_NAME, prepare_workspace
 
@@ -24,6 +26,8 @@ def create_celery_app(settings: Settings) -> Celery:
         task_routes={
             PING_TASK_NAME: {"queue": "orchestration"},
             PREPARE_TASK_NAME: {"queue": "orchestration"},
+            INDEX_TASK_NAME: {"queue": "indexing"},
+            EMBED_TASK_NAME: {"queue": "indexing"},
         },
         task_create_missing_queues=False,
         task_serializer="json",
@@ -83,4 +87,16 @@ def create_celery_app(settings: Settings) -> Celery:
         time_limit=960,
         max_retries=0,
     )(prepare_workspace)
+    application.task(
+        name=INDEX_TASK_NAME,
+        soft_time_limit=900,
+        time_limit=960,
+        max_retries=0,
+    )(index_code)
+    application.task(
+        name=EMBED_TASK_NAME,
+        soft_time_limit=900,
+        time_limit=960,
+        max_retries=0,
+    )(embed_code)
     return application

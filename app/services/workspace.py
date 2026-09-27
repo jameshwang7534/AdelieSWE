@@ -49,6 +49,12 @@ class WorkspaceService:
     def repository_path(self, repository_id: UUID) -> Path:
         return self._safe(self.root / "repositories" / str(UUID(str(repository_id))))
 
+    @contextmanager
+    def locked_repository(self, repository_id: UUID) -> Iterator[Path]:
+        """Share synchronization's lock with read-only workspace consumers."""
+        with self._lock(repository_id):
+            yield self.repository_path(repository_id)
+
     def _initialize(self) -> None:
         self._safe(self.root)
         self.root.mkdir(parents=True, exist_ok=True)

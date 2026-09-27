@@ -31,10 +31,27 @@ class Settings(BaseSettings):
     llm_api_key: SecretStr | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
+    llm_timeout_seconds: float = Field(default=30, ge=1, le=300)
+    llm_max_retries: int = Field(default=3, ge=0, le=5)
+    llm_max_output_tokens: int = Field(default=2048, ge=1, le=32768)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
+    embedding_batch_size: int = Field(default=16, ge=1, le=128)
+    embedding_max_retries: int = Field(default=3, ge=0, le=5)
+    embedding_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    embedding_send_dimensions: bool = True
     dependency_timeout_seconds: int = Field(default=2, ge=1, le=30)
     workspace_root: Path = Path("workspaces")
+    index_max_file_bytes: int = Field(default=262144, ge=1, le=10485760)
+    index_chunk_max_lines: int = Field(default=120, ge=1, le=1000)
+    index_chunk_max_chars: int = Field(default=8000, ge=1, le=100000)
+    context_max_issue_chars: int = Field(default=12000, ge=512, le=50000)
+    context_max_code_chars: int = Field(default=24000, ge=1, le=100000)
+    context_max_chunks: int = Field(default=12, ge=1, le=50)
+    context_max_files: int = Field(default=8, ge=1, le=50)
+    context_max_queries: int = Field(default=3, ge=1, le=5)
+    context_query_chars: int = Field(default=1000, ge=32, le=2000)
+    context_include_neighbors: bool = True
 
     @field_validator("github_api_url")
     @classmethod

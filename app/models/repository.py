@@ -28,6 +28,7 @@ class Repository(Record, Base):
     default_branch: Mapped[str] = mapped_column(String(255))
     local_status: Mapped[str] = mapped_column(String(50), server_default="pending")
     index_status: Mapped[str] = mapped_column(String(50), server_default="pending")
+    embedding_status: Mapped[str] = mapped_column(String(50), server_default="pending")
     __table_args__ = (
         Index(
             "uq_repositories_github_identity",
@@ -62,6 +63,9 @@ class CodeChunk(Record, Base):
     content: Mapped[str] = mapped_column(Text)
     content_hash: Mapped[str] = mapped_column(String(64), index=True)
     embedding: Mapped[list[float] | None] = mapped_column(VECTOR(EMBEDDING_DIMENSION))
+    embedding_status: Mapped[str] = mapped_column(String(50), server_default="pending")
+    embedding_profile: Mapped[str | None] = mapped_column(String(64))
+    embedding_content_hash: Mapped[str | None] = mapped_column(String(64))
     __table_args__ = (
         CheckConstraint("start_line > 0 AND end_line >= start_line", name="valid_line_range"),
     )

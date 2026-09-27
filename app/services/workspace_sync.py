@@ -29,5 +29,6 @@ def prepare_registered_repository(
             record.local_status = status
             # Existing code context must not be considered current during/after a new sync.
             record.index_status = "pending"
+            record.embedding_status = "pending"
 
     return workspace.prepare(repository_id, source, branch, on_status=update_status)

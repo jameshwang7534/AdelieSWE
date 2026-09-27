@@ -23,6 +23,13 @@ class PlanTask(Record, Base):
     task_key: Mapped[str] = mapped_column(String(100))
     title: Mapped[str] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    acceptance_criteria: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB), default=list, server_default=text("'[]'::jsonb")
+    )
+    suggested_tests: Mapped[list[str]] = mapped_column(
+        MutableList.as_mutable(JSONB), default=list, server_default=text("'[]'::jsonb")
+    )
     status: Mapped[str] = mapped_column(String(50), server_default="pending")
     dependencies: Mapped[list[str]] = mapped_column(
         MutableList.as_mutable(JSONB), default=list, server_default=text("'[]'::jsonb")
@@ -36,4 +43,8 @@ class PlanTask(Record, Base):
         CheckConstraint("sequence >= 0", name="nonnegative_sequence"),
         CheckConstraint("jsonb_typeof(dependencies) = 'array'", name="dependencies_array"),
         CheckConstraint("jsonb_typeof(target_files) = 'array'", name="target_files_array"),
+        CheckConstraint(
+            "jsonb_typeof(acceptance_criteria) = 'array'", name="acceptance_criteria_array"
+        ),
+        CheckConstraint("jsonb_typeof(suggested_tests) = 'array'", name="suggested_tests_array"),
     )

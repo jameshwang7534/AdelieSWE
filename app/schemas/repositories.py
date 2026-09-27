@@ -20,6 +20,7 @@ class RepositoryResponse(BaseModel):
     default_branch: str
     local_status: str
     index_status: str
+    embedding_status: str
     created_at: datetime
     updated_at: datetime
 
