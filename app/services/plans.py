@@ -2,11 +2,13 @@
 
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import session_scope
 from app.models import ImplementationPlan, Issue, PlanTask
 from app.schemas.planning import ImplementationPlanProposal
+from app.schemas.plans import PlanResponse, PlanTaskResponse
 from app.services.repositories import RecordNotFound
 
 
@@ -44,3 +46,23 @@ class PlanService:
             session.flush()
             identifier = plan.id
         return identifier
+
+    def get(self, plan_id: UUID) -> PlanResponse:
+        with session_scope(self.sessions) as session:
+            plan = session.get(ImplementationPlan, plan_id)
+            if plan is None:
+                raise RecordNotFound
+            tasks = session.scalars(
+                select(PlanTask)
+                .where(PlanTask.plan_id == plan_id)
+                .order_by(PlanTask.sequence, PlanTask.task_key)
+            ).all()
+            return PlanResponse(
+                id=plan.id,
+                issue_id=plan.issue_id,
+                summary=plan.summary,
+                status=plan.status,
+                created_at=plan.created_at,
+                updated_at=plan.updated_at,
+                tasks=[PlanTaskResponse.model_validate(task) for task in tasks],
+            )

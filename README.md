@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: Minimal API, persistence, Celery tasks, GitHub imports, workspaces, CodeChunk indexing, BM25, vector/hybrid retrieval, and bounded issue context available.** Workers can prepare checkouts, persist chunks, and generate embeddings through an OpenAI-compatible provider. Agents, agent LLM calls, and the issue-to-pull-request workflow remain PLANNED.
+> **Status: Minimal API, persistence, Celery tasks, GitHub imports, workspaces, CodeChunk indexing, BM25, vector/hybrid retrieval, bounded issue context, and LLM-backed draft planning available.** Workers can prepare checkouts, persist chunks, and generate embeddings through an OpenAI-compatible provider. Plan execution, coding/testing/debugging/review agents, and the complete issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -175,6 +175,7 @@ The following structure exists. Most component packages remain placeholders; hea
 │   │   ├── vector.py        # Exact pgvector cosine retrieval
 │   │   └── postgres.py      # Repository-scoped chunk loading
 │   ├── agents/
+│   │   └── planner.py       # Structured draft planning with bounded validation repair
 │   ├── orchestration/
 │   ├── workers/
 │   │   ├── celery_app.py    # Worker CLI entry point
@@ -209,7 +210,7 @@ The phases below indicate intended sequencing, not completed capabilities or per
 3. **Persistence and background execution (partial):** local PostgreSQL/pgvector and Redis, nine models, migrations, and Celery diagnostic execution are available. Business task execution remains planned.
 4. **Repository access:** mockable GitHub REST adapter, repository/issue imports, and managed repository checkout are available.
 5. **Indexing and retrieval (partial):** source scanning, deterministic chunking, CodeChunk persistence, and BM25 search are available. Batched embeddings and pgvector cosine search are available. Hybrid retrieval now combines both rankings with RRF.
-6. **Planning and orchestration (partial):** validated plan proposals, DAG ordering, and atomic plan/task persistence exist. LLM planning, scheduling, and worker dispatch remain planned.
+6. **Planning and orchestration (partial):** LLM-backed draft planning, validated proposals, DAG ordering, and atomic plan/task persistence exist. Scheduling, execution, and worker dispatch remain planned.
 7. **Coding and isolated validation:** add coding/test agents and the Docker sandbox execution interface.
 8. **Recovery and review:** add bounded debugging loops and review-agent feedback with explicit failure states.
 9. **Pull request delivery:** integrate branch publication and review-ready pull request generation.
@@ -795,15 +796,16 @@ Use `python -m alembic upgrade head` before persistence. No environment variable
 were added. DAG invariants are enforced through this service; direct SQL/model writes can bypass
 them. Raw SQL still has foreign-key, uniqueness, JSON-array, and sequence constraints.
 
-There is no planner LLM, task execution, scheduling, or new HTTP endpoint in this step. The schema
-and persistence service are ready for a later planner integration.
+The planner described below now uses this schema and persistence service. Task execution and
+scheduling remain planned.
 
 ## Async structured LLM provider
 
 `LLMProvider.generate(messages, response_model)` is an async, provider-neutral interface. It returns
 an `LLMResult` containing validated Pydantic `output` plus `TokenUsage` (`input_tokens`,
 `output_tokens`, `total_tokens`). Missing usage values remain null; usage is never estimated.
-Callers supply typed `LLMMessage` objects and own all prompts. No planner/coding agent is present.
+Callers supply typed `LLMMessage` objects and own all prompts. Planner prompts live in `PlannerAgent`,
+outside the provider; coding agents remain planned.
 
 `OpenAICompatibleLLMProvider` uses httpx AsyncClient and `/chat/completions` with JSON Schema
 structured output. This endpoint supports compatible third-party services as well as OpenAI.
@@ -838,12 +840,14 @@ guarantee is provided.
 
 Sanitized `LLMError.code` values distinguish configuration, authentication, rate limits, timeouts,
 availability, rejected requests, refusal, incomplete completion, and invalid JSON/schema output.
-Authentication, malformed output, refusals, and incomplete responses are not retried. Neither the
+Authentication, malformed output, refusals, and incomplete responses are not retried by the provider.
+The planner separately repairs malformed/schema-invalid proposals with bounded retries. Neither the
 provider nor diagnostic service logs credentials, prompts, response text, or raw HTTP exceptions.
 The adapter does not stream, call tools, estimate costs, or persist runs.
 
-`FakeLLMProvider` takes explicit JSON fixture text, validates it with the same Pydantic parser, and
-optionally returns supplied usage metadata. It never contacts the network or becomes a production
+`FakeLLMProvider` takes explicit JSON fixture text (or a sequence for repair tests, repeating the final
+response), validates it with the same Pydantic parser, and optionally returns supplied usage metadata.
+It records input messages for test assertions. It never contacts the network or becomes a production
 fallback. The diagnostic service proves structured parsing without real credentials:
 
 ```python
@@ -859,6 +863,51 @@ assert result.output.status == "ok"
 Run `python -m pytest tests/unit/test_llm_provider.py -q` for mocked HTTP, retries, timeout,
 cancellation, schema, usage, lifecycle, and log-redaction checks. No real API test is required.
 Live-provider setup instructions will be provided if a real integration test is requested.
+
+## Planner agent and draft plan API
+
+`PlannerAgent` receives the structured `IssueContext`: imported issue title/body, repository metadata,
+hybrid-retrieved snippets, file/line references, and retrieval evidence. Its system prompt limits work
+to the issue, requests small tasks, likely files, rationale, acceptance criteria, suggested tests,
+and task-key dependencies. It prohibits cycles and unrelated refactoring, treats retrieved text as
+untrusted evidence, and requires CREATE/MODIFY distinctions in descriptions. Partial context is not
+proof that a file is absent; the planner must state assumptions. These are model instructions, not
+a guarantee that proposed file operations are correct; plans require review.
+
+`POST /issues/{issue_id}/plan` builds the bounded hybrid context, awaits the structured LLM provider,
+and validates `ImplementationPlanProposal` including the existing DAG rules. On invalid JSON/schema
+or dependencies, it supplies sanitized validation categories and requests a complete replacement.
+`PLANNER_VALIDATION_RETRIES` defaults to 2 (range 0–3): at most three generations by default. Provider
+transport retries apply independently within each generation. Refusals, authentication errors, and
+incomplete completions are not treated as repairable proposals.
+
+Only a valid proposal reaches `PlanService`, which revalidates and atomically saves a `draft` plan
+with `pending` tasks in topological order. Database transactions are not held during LLM requests.
+The endpoint returns HTTP 201 with plan/issue IDs, summary, status, timestamps, and all task fields.
+`GET /plans/{plan_id}` returns the same representation without an LLM call. Each successful POST
+creates a new draft; request idempotency is not provided. No execution or worker dispatch occurs.
+
+Errors use structured `detail.code`: 404 `record_not_found`, 409 `repository_index_not_ready`,
+422 `planner_invalid_proposal` after exhausted validation attempts, and 503 for missing configuration,
+provider/embedding failures, or database unavailability. Invalid plans are never saved. The API
+request waits for planning to finish; background planning and agent-run accounting remain planned.
+
+For production generation, existing `DATABASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, and embedding settings
+must be configured locally. No key is needed for startup, saved-plan reads, or fake-provider tests.
+The repository must already be indexed; normal hybrid context construction uses query embeddings.
+This step's tests use fake providers and do not require a live LLM account.
+
+With an imported issue UUID, configured provider, and the API running:
+
+```powershell
+$plan = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:8000/issues/$issueId/plan"
+Invoke-RestMethod -Uri "http://127.0.0.1:8000/plans/$($plan.id)"
+```
+
+Run `python -m pytest tests/unit/test_planner.py -q` for offline prompt, repair, and retry tests.
+With the documented PostgreSQL test environment enabled, run
+`python -m pytest tests/integration/test_planner.py -q` for real hybrid context and transactional
+plan persistence using fake embedding/LLM providers. No new migration is needed.
 
 ## PostgreSQL persistence
 

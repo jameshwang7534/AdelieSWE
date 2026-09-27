@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=30, ge=1, le=300)
     llm_max_retries: int = Field(default=3, ge=0, le=5)
     llm_max_output_tokens: int = Field(default=2048, ge=1, le=32768)
+    planner_validation_retries: int = Field(default=2, ge=0, le=3)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
     embedding_batch_size: int = Field(default=16, ge=1, le=128)

@@ -7,6 +7,8 @@ from contextlib import AbstractContextManager, asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.context import router as context_router
+from app.api.plans import LLMFactory
+from app.api.plans import router as plans_router
 from app.api.repositories import router as repositories_router
 from app.api.search import router as search_router
 from app.api.status import router
@@ -19,6 +21,9 @@ from app.services.context_resources import context_resources
 from app.services.context_store import ContextStore
 from app.services.github_resources import repository_resources
 from app.services.issue_context import IssueContextService
+from app.services.llm_resources import llm_resources
+from app.services.plan_resources import plan_resources
+from app.services.plans import PlanService
 from app.services.readiness import Checks, readiness_resources
 from app.services.repositories import RepositoryService
 from app.services.retrieval_resources import retrieval_resources
@@ -31,6 +36,7 @@ RepositoryFactory = Callable[[Settings], AbstractContextManager[RepositoryServic
 RetrievalFactory = Callable[[Settings], AbstractContextManager[Retriever | None]]
 VectorFactory = Callable[[Settings], AbstractContextManager[VectorRetriever | None]]
 ContextFactory = Callable[[Settings], AbstractContextManager[ContextStore | None]]
+PlanFactory = Callable[[Settings], AbstractContextManager[PlanService | None]]
 
 
 def create_app(
@@ -41,6 +47,8 @@ def create_app(
     retrieval_factory: RetrievalFactory = retrieval_resources,
     vector_factory: VectorFactory = vector_resources,
     context_factory: ContextFactory = context_resources,
+    plan_factory: PlanFactory = plan_resources,
+    llm_factory: LLMFactory = llm_resources,
 ) -> FastAPI:
     """Build the API; connections are opened on demand by dependency-using routes."""
     configuration = settings if settings is not None else Settings()
@@ -55,8 +63,11 @@ def create_app(
                 retrieval_factory(configuration) as retriever,
                 vector_factory(configuration) as vector_retriever,
                 context_factory(configuration) as context_store,
+                plan_factory(configuration) as plans,
             ):
                 application.state.checks = checks
+                application.state.plan_service = plans
+                application.state.llm_factory = llm_factory
                 application.state.task_queue = queue
                 application.state.repository_service = repository_service
                 application.state.bm25_retriever = retriever
@@ -81,6 +92,8 @@ def create_app(
                     del application.state.vector_retriever
                     del application.state.retriever
                     del application.state.issue_context
+                    del application.state.plan_service
+                    del application.state.llm_factory
 
     application = FastAPI(title=configuration.app_name, lifespan=lifespan)
     application.state.settings = configuration
@@ -89,4 +102,5 @@ def create_app(
     application.include_router(repositories_router)
     application.include_router(search_router)
     application.include_router(context_router)
+    application.include_router(plans_router)
     return application

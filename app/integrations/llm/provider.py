@@ -26,6 +26,29 @@ class LLMError(Exception):
         super().__init__(code)
 
 
+def validation_feedback(error: ValidationError) -> tuple[str, ...]:
+    """Bounded diagnostic categories; never include rejected values or raw exception text."""
+    dag_errors = {
+        "Task keys must be unique",
+        "Task cannot depend on itself",
+        "Duplicate task dependencies",
+        "Dependency references an unknown task",
+        "Plan dependencies contain a cycle",
+        "Plan must contain at least one task",
+    }
+    feedback = []
+    for item in error.errors(include_input=False, include_context=False, include_url=False)[:8]:
+        message = item["msg"].removeprefix("Value error, ")
+        feedback.append(message if message in dag_errors else item["type"])
+    return tuple(feedback)
+
+
+class LLMValidationError(LLMError):
+    def __init__(self, feedback: tuple[str, ...]) -> None:
+        super().__init__("llm_invalid_response")
+        self.feedback = feedback
+
+
 class LLMMessage(BaseModel):
     role: Literal["system", "user", "assistant"]
     content: str = Field(min_length=1)
@@ -52,5 +75,5 @@ class LLMProvider(Protocol):
 def parse_output[T: BaseModel](content: str, response_model: type[T]) -> T:
     try:
         return response_model.model_validate_json(content, strict=True)
-    except ValidationError:
-        raise LLMError("llm_invalid_response") from None
+    except ValidationError as error:
+        raise LLMValidationError(validation_feedback(error)) from None
