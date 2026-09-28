@@ -51,6 +51,18 @@ class Settings(BaseSettings):
     sandbox_pid_limit: int = Field(default=64, ge=16, le=256)
     sandbox_output_bytes: int = Field(default=1048576, ge=1024, le=4194304)
     sandbox_user: str = Field(default="1000:1000", pattern=r"^[1-9][0-9]{0,8}:[1-9][0-9]{0,8}$")
+    test_allowed_commands: tuple[str, ...] = (
+        "pytest",
+        "python -m pytest",
+        "python -m unittest",
+        "npm test",
+        "npm run test",
+        "npm run lint",
+        "pnpm test",
+        "yarn test",
+        "go test",
+        "cargo test",
+    )
     index_max_file_bytes: int = Field(default=262144, ge=1, le=10485760)
     index_chunk_max_lines: int = Field(default=120, ge=1, le=1000)
     index_chunk_max_chars: int = Field(default=8000, ge=1, le=100000)

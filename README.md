@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, and explicit coding proposals/patch application available.** Coding does not automatically run through workers or complete tasks. Test/debug/review agents and the complete issue-to-pull-request workflow remain PLANNED.
+> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding proposals, and trusted test execution available.** Coding does not automatically complete tasks; TestAgent requires all configured checks to pass. Automatic agent dispatch, debug/review agents, and the complete issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -1225,6 +1225,63 @@ $env:RUN_DATABASE_TESTS = "1"
 python -m pytest tests/integration/test_coding.py -q
 ```
 
+## Trusted test execution (Step 20)
+
+`TestService(settings, sandbox, records).run(run_id, task_execution_id, config)`
+executes required checks for a task awaiting validation after coding. Production callers
+inject `DockerSandbox(settings)` and `TestRecords(session_factory)`. The configuration
+is an application/operator-supplied `RepositoryTestConfig`, for example:
+
+```python
+RepositoryTestConfig(required_commands=("python -m pytest",))
+```
+
+Do not obtain this policy from LLM output or automatically trust a configuration file
+changed by the coding agent. `TestAgent` receives repository metadata, the persisted
+plan task, coding diff, suggested tests, and this configuration. Selection is deterministic:
+all required profiles run, duplicate profiles collapse, and untrusted suggestions cannot
+add commands or remove checks. Empty configurations are rejected. No LLM call is needed.
+
+`TEST_ALLOWED_COMMANDS` is a JSON array of enabled exact profile names. Supported profiles
+are `pytest`, `python -m pytest`, `npm test`, `npm run test`, `npm run lint`, `pnpm test`,
+`yarn test`, `go test`, and `cargo test`. The additional `python -m unittest` profile runs
+`python -m unittest discover`; `go test` runs `go test ./...`. Other profiles map to their
+literal argv. Arbitrary flags, paths, shell operators, and executable strings are rejected.
+Extending command shapes requires a reviewed policy change, not an environment override.
+
+Python commands use the `python` alias from `SANDBOX_IMAGES`; npm/pnpm/yarn use `node`,
+Go uses `go`, and Cargo uses `rust`. Missing aliases fail before any command runs.
+Only the Python image is configured by default. Operators must provide reviewed,
+preloaded images with the required tools and offline dependencies; the default Python
+image includes unittest but does **not** include pytest. No package installation or
+network enablement is performed by TestAgent. The real Docker tests use stdlib unittest.
+
+Known test commands still execute untrusted repository code (including package scripts,
+plugins and build scripts). They run only through the sandbox's non-root, network-disabled,
+resource-limited containers with its environment and workspace restrictions. A workspace
+lock excludes concurrent coding/testing by these services. Test results record argv, exit
+code, stdout, stderr, duration, timeout, truncation, and pass/fail; configured credentials
+are redacted before result persistence. Logs can still contain unknown repository secrets,
+so use sanitized execution workspaces as required by the sandbox policy.
+
+The service atomically claims a task as `tests_running` and creates a test `AgentRun`.
+No DB transaction spans command execution. Only all required checks exiting zero without
+timeout permit task completion and downstream scheduling. A failed check, timeout, rejected
+policy, or sandbox error persists failure; completed results survive a later command error.
+Repeated invocation is rejected once claimed/finished. Existing explicit orchestration
+transition APIs remain available to trusted callers; this is not a new authorization layer.
+There is no automatic debug/retry loop, test HTTP endpoint, or Celery agent dispatch.
+Exit status is the success criterion; detecting vacuous test suites and protection against
+repository code falsifying tests are not implemented. Crashed attempts require manual recovery.
+
+```powershell
+python -m pytest tests/unit/test_test_policy.py -q
+# Use the documented TEST_DATABASE_URL; Docker must have the configured Python image.
+$env:RUN_DATABASE_TESTS = "1"
+$env:RUN_SANDBOX_TESTS = "1"
+python -m pytest tests/integration/test_test_agent.py -q
+```
+
 ## Current project status
 
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
@@ -1233,7 +1290,8 @@ python -m pytest tests/integration/test_coding.py -q
 - **Present:** immutable implementation-plan proposals, DAG validation, deterministic execution ordering, and atomic plan/task persistence.
 - **Present:** async structured LLM providers, fake provider, planner agent, and validated draft-plan APIs.
 - **Present:** persisted dependency scheduling and execution state, isolated Docker command sandbox, coding proposals and safe patch application with agent/task audit records.
-- **PLANNED:** automatic coding dispatch, test/debug/review agents, recovery loops, complete execution and pull request workflows, and application containers.
+- **Present:** deterministic TestAgent command policy, sandboxed required checks, persisted reports, and task completion gated by test results.
+- **PLANNED:** automatic agent dispatch, debug/review agents, recovery loops, complete execution and pull request workflows, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.
