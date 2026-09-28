@@ -165,3 +165,14 @@ def test_edit_previously_created_untracked_file(tmp_path: Path, local_repository
         observed = service.apply(path, change(edit, ("new.py",)))
     assert "new.py" in observed and "+changed" in observed
     assert (path / "new.py").read_text() == "changed\n"
+
+
+def test_explicit_crlf_patch_preserves_bytes(tmp_path: Path, local_repository: Path) -> None:
+    path = workspace(tmp_path, local_repository)
+    (path / "hello.txt").write_bytes(b"original\r\n")
+    patch = EDIT.replace("-original\n", "-original\r\n").replace("+changed\n", "+changed\r\n")
+    service = CodePatchService(tmp_path)
+    with service.locked(path):
+        observed = service.apply(path, change(patch))
+    assert (path / "hello.txt").read_bytes() == b"changed\r\n"
+    assert "+changed\r\n" in observed

@@ -53,10 +53,7 @@ class LocalPatchGit:
                 command,
                 cwd=workspace,
                 env=environment,
-                input=patch,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
+                input=patch.encode("utf-8") if patch is not None else None,
                 capture_output=True,
                 timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
@@ -65,6 +62,10 @@ class LocalPatchGit:
             raise PatchError("patch_git_timeout") from None
         except OSError:
             raise PatchError("patch_git_unavailable") from None
-        if len(result.stdout.encode("utf-8")) > 1048576:
+        if len(result.stdout) > 1048576:
             raise PatchError("patch_diff_too_large")
-        return GitPatchResult(result.returncode, result.stdout, result.stderr[:4000])
+        return GitPatchResult(
+            result.returncode,
+            result.stdout.decode("utf-8", errors="replace"),
+            result.stderr[:4000].decode("utf-8", errors="replace"),
+        )

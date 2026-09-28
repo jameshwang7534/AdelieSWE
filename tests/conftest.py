@@ -13,8 +13,8 @@ def local_repository(tmp_path: Path) -> Path:
     source.mkdir()
     git = SubprocessGitRunner()
     git.run(["init", "--initial-branch=main"], cwd=source)
-    (source / "hello.txt").write_text("original\n", encoding="utf-8")
-    (source / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (source / "hello.txt").write_text("original\n", encoding="utf-8", newline="\n")
+    (source / ".gitignore").write_text("ignored.txt\n", encoding="utf-8", newline="\n")
     git.run(["add", "."], cwd=source)
     git.run(
         [
