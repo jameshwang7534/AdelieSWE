@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: Minimal API, persistence, Celery tasks, GitHub imports, workspaces, CodeChunk indexing, BM25, vector/hybrid retrieval, bounded issue context, and LLM-backed draft planning available.** Workers can prepare checkouts, persist chunks, and generate embeddings through an OpenAI-compatible provider. Plan execution, coding/testing/debugging/review agents, and the complete issue-to-pull-request workflow remain PLANNED.
+> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, and explicit coding proposals/patch application available.** Coding does not automatically run through workers or complete tasks. Test/debug/review agents and the complete issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -805,7 +805,7 @@ scheduling remain planned.
 an `LLMResult` containing validated Pydantic `output` plus `TokenUsage` (`input_tokens`,
 `output_tokens`, `total_tokens`). Missing usage values remain null; usage is never estimated.
 Callers supply typed `LLMMessage` objects and own all prompts. Planner prompts live in `PlannerAgent`,
-outside the provider; coding agents remain planned.
+outside the provider; planner and coding prompts live in their respective agents.
 
 `OpenAICompatibleLLMProvider` uses httpx AsyncClient and `/chat/completions` with JSON Schema
 structured output. This endpoint supports compatible third-party services as well as OpenAI.
@@ -1167,15 +1167,73 @@ Compose consumes the five infrastructure variables below. Settings consumes API 
 
 Credential values must be supplied locally through the appropriate environment variables or a future secret-management integration, never pasted into project documentation or committed to Git.
 
+## Coding proposals and patch application (Step 19)
+
+`CodingAgent` uses the existing asynchronous `LLMProvider` interface to generate a
+validated `CodeChangeProposal`: `summary`, `files_changed`, `unified_diff`,
+`assumptions`, and `tests_to_run`. Its inputs include the task from the persisted
+plan snapshot, original issue and repository metadata in `IssueContext`, retrieved
+snippets with line ranges, completed dependency outcomes, and actual workspace status.
+The prompt treats repository text as untrusted context and limits changes to the task.
+Test suggestions are descriptive output; they are never executed as shell commands.
+
+`CodingService.run(execution_run_id, task_execution_id, context)` is an explicit
+service entry point. Supply context from `IssueContextService` and prepare the
+managed execution checkout using `WorkspaceService` first. The workspace must be
+`WORKSPACE_ROOT/executions/<repository UUID>/<execution UUID>`. The service checks
+issue/repository identity, requires a queued task with completed dependencies, and
+atomically claims it as running while creating an `AgentRun`. No database transaction
+stays open during the LLM request or Git operations. This step adds no coding HTTP
+endpoint, Celery dispatch, automatic test execution, or debug/recovery loop.
+
+Patch application checks all declared paths and parses a restricted Git unified-diff
+format before running `git apply --check` followed by `git apply`. It rejects absolute
+paths, traversal, `.git` internals, environment/credential files, symlinks, hardlinks,
+renames, binary patches, and mode changes. File lists must exactly match the patch.
+Git runs without a shell, global configuration, external diff drivers, or hooks.
+Only a small allowlist of local Git configuration is accepted; use the standalone
+managed execution copy with its remote removed. A workspace lock prevents concurrent
+coding operations on the same checkout.
+
+Successful application records the proposal, collected Git diff (including newly
+created untracked files), and available token usage in `AgentRun`. That agent attempt
+is completed, but `TaskExecution` remains **running**, with
+`patch_applied_awaiting_validation`; dependent tasks remain blocked from scheduling.
+The service never commits changes or marks a task completed merely because a patch
+applied. Malformed proposals and application failures persist failed agent/task states
+and bounded, redacted patch diagnostics. Configured credentials are rejected in
+proposals and redacted from recorded diagnostics; arbitrary unknown secrets cannot
+be reliably detected by content inspection.
+
+Current limits: at most 50 files, a 256 KiB patch, existing target files at most 1 MiB,
+and simple ASCII paths without spaces. The shared workspace safety policy rejects
+secret-named files anywhere in the checkout, including `.env.example`; prepare a
+sanitized execution copy. Existing edits are preserved, and collected diffs for the
+proposed files are relative to HEAD, so they can include earlier task edits. Git and
+database writes are not one atomic transaction: a failure after application can leave
+changes requiring inspection. A process crash can leave a running task or lock file;
+inspect the checkout and confirm no coding process remains before manual recovery.
+There is no automatic replay or recovery in this step.
+
+Tests use `FakeLLMProvider`, temporary local Git repositories, and optional PostgreSQL
+integration tests; no real LLM key or network call is needed. Run:
+
+```powershell
+python -m pytest tests/unit/test_code_patches.py -q
+# With the existing test database configuration described above:
+$env:RUN_DATABASE_TESTS = "1"
+python -m pytest tests/integration/test_coding.py -q
+```
+
 ## Current project status
 
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
 - **Present:** managed Git checkout/update/reset, independent execution copies, workspace preparation, and asynchronous scanning/chunk persistence and resumable embedding generation.
 - **Present:** repository-scoped BM25/vector/hybrid search and bounded issue context through GET /issues/{issue_id}/context.
 - **Present:** immutable implementation-plan proposals, DAG validation, deterministic execution ordering, and atomic plan/task persistence.
-- **Present:** async structured LLM provider abstraction, OpenAI-compatible adapter, deterministic fake, and diagnostic service; no agent prompts or execution.
-- **PLANNED:** further business APIs, agents, orchestration, agent LLM integrations, sandbox execution, and pull request workflows.
-- **Not yet created:** agent/orchestration business logic, agent LLM integration implementations, and application containers.
+- **Present:** async structured LLM providers, fake provider, planner agent, and validated draft-plan APIs.
+- **Present:** persisted dependency scheduling and execution state, isolated Docker command sandbox, coding proposals and safe patch application with agent/task audit records.
+- **PLANNED:** automatic coding dispatch, test/debug/review agents, recovery loops, complete execution and pull request workflows, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.
