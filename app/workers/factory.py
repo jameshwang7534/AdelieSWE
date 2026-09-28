@@ -6,6 +6,12 @@ from kombu import Queue
 from app.core.config import Settings
 from app.workers.embeddings import EMBED_TASK_NAME, embed_code
 from app.workers.indexing import INDEX_TASK_NAME, index_code
+from app.workers.orchestration import (
+    RECONCILE_TASK_NAME,
+    RECOVER_TASK_NAME,
+    reconcile_execution,
+    recover_executions,
+)
 from app.workers.tasks import PING_TASK_NAME, ping
 from app.workers.workspaces import PREPARE_TASK_NAME, prepare_workspace
 
@@ -28,8 +34,17 @@ def create_celery_app(settings: Settings) -> Celery:
             PREPARE_TASK_NAME: {"queue": "orchestration"},
             INDEX_TASK_NAME: {"queue": "indexing"},
             EMBED_TASK_NAME: {"queue": "indexing"},
+            RECONCILE_TASK_NAME: {"queue": "orchestration"},
+            RECOVER_TASK_NAME: {"queue": "orchestration"},
         },
         task_create_missing_queues=False,
+        beat_schedule={
+            "recover-executions": {
+                "task": RECOVER_TASK_NAME,
+                "schedule": settings.orchestration_recovery_seconds,
+                "options": {"queue": "orchestration"},
+            }
+        },
         task_serializer="json",
         result_serializer="json",
         accept_content=["json"],
@@ -99,4 +114,16 @@ def create_celery_app(settings: Settings) -> Celery:
         time_limit=960,
         max_retries=0,
     )(embed_code)
+    for name, function in (
+        (RECONCILE_TASK_NAME, reconcile_execution),
+        (RECOVER_TASK_NAME, recover_executions),
+    ):
+        application.task(
+            name=name,
+            acks_late=True,
+            reject_on_worker_lost=True,
+            soft_time_limit=900,
+            time_limit=960,
+            max_retries=0,
+        )(function)
     return application

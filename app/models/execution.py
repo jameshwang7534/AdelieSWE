@@ -27,6 +27,7 @@ class ExecutionRun(Record, Base):
     plan_id: Mapped[UUID] = mapped_column(ForeignKey("implementation_plans.id"), index=True)
     status: Mapped[str] = mapped_column(String(50), server_default="pending")
     branch_name: Mapped[str | None] = mapped_column(String(255))
+    plan_snapshot: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (CheckConstraint("completed_at >= started_at", name="valid_run_times"),)

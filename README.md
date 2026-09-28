@@ -909,6 +909,122 @@ With the documented PostgreSQL test environment enabled, run
 `python -m pytest tests/integration/test_planner.py -q` for real hybrid context and transactional
 plan persistence using fake embedding/LLM providers. No new migration is needed.
 
+## Execution-run orchestration state (Step 17)
+
+`POST /plans/{plan_id}/executions` validates the saved proposal and returns HTTP 202 with a new
+persisted run. `GET /executions/{execution_id}` returns the run and task states. Each POST creates
+a separate run; duplicate Celery messages for a run do not create another run or task attempt.
+Migration `0004` stores an immutable validated plan snapshot, so later plan edits do not change
+existing run dependencies. Legacy runs without snapshots are not automatically scheduled.
+
+Task state machine: `pending -> queued -> running -> completed | failed`.
+A pending task becomes `blocked` if any required dependency fails or is blocked. It becomes
+`queued` only when every dependency completes. Independent ready tasks are queued together.
+Run states are `pending -> running -> completed | failed`; a failed run becomes terminal once
+its other independent tasks are terminal. `pending` means waiting for prerequisites, whereas
+`blocked` is terminal dependency failure. Run-row locks serialize transitions and claims.
+Repeated reconciliation, duplicate claims, and repeated identical terminal reports are no-ops;
+invalid transitions are rejected. PlanTask definitions are unchanged; states live in TaskExecution.
+
+The Celery `execution.reconcile` task uses the `orchestration` queue and only updates scheduling
+state. **No production task executor, AI coding, or Docker sandbox execution is enabled.** Tasks
+remain queued until an executor is explicitly supplied. Tests use a fake executor to exercise
+completion/failure. A task already marked running is not automatically re-executed after restart;
+executor crash recovery and task retries remain planned.
+
+Start the existing orchestration worker and one separate Beat scheduler for periodic recovery:
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head
+.\.venv\Scripts\python.exe -m celery -A app.workers.celery_app:app worker --pool=solo -Q orchestration --loglevel=INFO
+# In another terminal with the same environment:
+.\.venv\Scripts\python.exe -m celery -A app.workers.celery_app:app beat --loglevel=INFO
+```
+
+`ORCHESTRATION_RECOVERY_SECONDS=30` controls the Beat interval (5–3600 seconds). Beat submits
+`execution.recover`, which reconstructs scheduling from persisted active runs. A broker error after
+run creation is logged without credentials; the API still returns the durable pending run, and
+recovery schedules it later. Worker and Beat must be running for automatic recovery. No additional
+external service or credential is required. The Beat schedule file is ignored by Git.
+
+The integration audit exercises the diamond DAG A → B/C → D, failed prerequisites, simultaneous
+claims, restarts, and duplicate delivery using real PostgreSQL/Redis with a fake executor.
+
+## Docker command sandbox (Step 18)
+
+`Sandbox` is a replaceable interface; `DockerSandbox` runs an argv command inside a temporary Linux
+container using a mockable `DockerRunner`. The implementation uses the installed Docker CLI with
+`shell=False`; no SDK dependency, API endpoint, agent invocation, or orchestration hookup is added.
+
+`SandboxRequest` accepts `workspace`, an image **alias**, `command` (argument list), `timeout`,
+explicit `environment` values, and `environment_allowlist`. It returns `SandboxResult` with
+`exit_code`, separate `stdout`/`stderr`, `elapsed_seconds`, `timed_out`, and `output_truncated`.
+Nonzero command exits are ordinary results. A timeout returns partial output and a null exit code;
+the container is forcibly removed. Operational/policy failures raise sanitized `SandboxError`.
+
+Only existing execution workspaces of the form
+`WORKSPACE_ROOT/executions/{repository_uuid}/{execution_uuid}` are accepted, matching
+`WorkspaceService.create_execution`. Root/parent paths, symlinks, junctions, hard links, special
+files, nested mounts, and known sensitive filenames are rejected. This conservatively rejects all
+`.env*` files (including examples), key/certificate files, and common credential directories. Supply
+a clean disposable execution checkout; this is not a general-purpose secret-content detector.
+
+Restrictions are fixed by the adapter, not request-supplied Docker options:
+
+- Non-root `1000:1000`, no privileged mode, all capabilities dropped, no new privileges.
+- Network disabled, no published ports or Docker socket mount.
+- Read-only container root; only the specific task workspace is bind-mounted read/write, without
+  recursive submounts. A 64 MiB restricted tmpfs provides `/tmp`; shared memory is capped at 16 MiB.
+- CPU, memory/swap, PID, and command-time limits. Docker's default seccomp policy remains enabled.
+- Image entrypoint/healthcheck disabled; `/usr/bin/env -i` clears inherited image environment.
+  Fixed PATH/HOME/TMPDIR plus explicitly supplied, allowed values form the command environment.
+  Docker client-config proxy variables are explicitly cleared during container creation, preventing
+  proxy credentials from appearing in container metadata or the init process environment.
+- The request allowlist must be a subset of `CI`, `LANG`, `LC_ALL`, `TZ`, `PYTHONHASHSEED`, and
+  `PYTHONDONTWRITEBYTECODE`. Host environment values are never copied into the container; GitHub/LLM
+  credential names are forbidden and known configured credential values are rejected in inputs.
+- Output is continuously drained but retained only up to the configured limit per stream. Docker
+  disk logging is disabled. Application logs include container ID/status only, never commands,
+  environment values, stdout/stderr, or raw Docker errors.
+
+`SANDBOX_IMAGES` is operator-controlled JSON mapping aliases to reviewed images; its default is
+`{"python":"python:3.12-slim"}`. Execution resolves the installed image to its immutable local ID,
+rejects images with declared volumes, and never pulls automatically. Images must include
+`/usr/bin/env` and the requested executable. Pin reviewed image digests in this mapping for
+reproducible deployments; never populate it from repository content or an API request.
+
+| Environment variable | Default |
+| --- | --- |
+| `SANDBOX_TIMEOUT_SECONDS` | 60; caps the requested command timeout |
+| `SANDBOX_CPU_LIMIT` | 1 CPU |
+| `SANDBOX_MEMORY_MB` | 256 MiB; swap total equals memory |
+| `SANDBOX_PID_LIMIT` | 64 |
+| `SANDBOX_OUTPUT_BYTES` | 1048576 bytes per stdout/stderr stream |
+| `SANDBOX_USER` | `1000:1000`; positive numeric UID/GID only |
+
+Use a local Linux Docker engine (Docker Desktop Linux containers on Windows). Do not expose the
+Docker API over unauthenticated TCP. The configured non-root UID needs access to the disposable
+task directory on Linux; the sandbox never changes permissions or falls back to root.
+
+```powershell
+docker version
+docker info --format '{{.OSType}}'
+docker pull python:3.12-slim
+$env:RUN_SANDBOX_TESTS='1'
+.\.venv\Scripts\python.exe -m pytest tests/unit/test_sandbox.py tests/integration/test_sandbox.py -q
+```
+
+The optional integration test verifies real container restrictions, non-root identity, environment
+isolation, exit code, separate streams, timeout, output limits, and removal. Unit tests need no Docker
+service or credentials. Containers are removed in `finally`, including start/command failures;
+cleanup failures are reported, never hidden. Daemon outages or abrupt host-process termination can
+prevent cleanup; containers are labeled `platform.sandbox=true` for operator inspection. The command
+deadline excludes preflight/creation and cleanup (each CLI control call has its own 15-second limit).
+Containers share the engine's kernel and the task mount is writable; this is not a VM boundary or
+a workspace disk-quota system. Returned output remains untrusted data.
+
+Docker option reference: [Docker container run documentation](https://docs.docker.com/reference/cli/docker/container/run/).
+
 ## PostgreSQL persistence
 
 Install the current dependencies with `python -m pip install -e ".[dev]"` in the virtual environment. Provide `DATABASE_URL` through the environment or a local `.env` based on `.env.example`, then start local infrastructure and run:

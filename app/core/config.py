@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     llm_max_retries: int = Field(default=3, ge=0, le=5)
     llm_max_output_tokens: int = Field(default=2048, ge=1, le=32768)
     planner_validation_retries: int = Field(default=2, ge=0, le=3)
+    orchestration_recovery_seconds: int = Field(default=30, ge=5, le=3600)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
     embedding_batch_size: int = Field(default=16, ge=1, le=128)
@@ -43,6 +44,13 @@ class Settings(BaseSettings):
     embedding_send_dimensions: bool = True
     dependency_timeout_seconds: int = Field(default=2, ge=1, le=30)
     workspace_root: Path = Path("workspaces")
+    sandbox_images: dict[str, str] = Field(default_factory=lambda: {"python": "python:3.12-slim"})
+    sandbox_timeout_seconds: int = Field(default=60, ge=1, le=900)
+    sandbox_cpu_limit: float = Field(default=1, ge=0.1, le=4)
+    sandbox_memory_mb: int = Field(default=256, ge=64, le=2048)
+    sandbox_pid_limit: int = Field(default=64, ge=16, le=256)
+    sandbox_output_bytes: int = Field(default=1048576, ge=1024, le=4194304)
+    sandbox_user: str = Field(default="1000:1000", pattern=r"^[1-9][0-9]{0,8}:[1-9][0-9]{0,8}$")
     index_max_file_bytes: int = Field(default=262144, ge=1, le=10485760)
     index_chunk_max_lines: int = Field(default=120, ge=1, le=1000)
     index_chunk_max_chars: int = Field(default=8000, ge=1, le=100000)

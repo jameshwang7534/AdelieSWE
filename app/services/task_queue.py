@@ -10,11 +10,13 @@ from celery import Celery
 from app.core.config import Settings
 from app.schemas.tasks import PingMetadata, TaskState
 from app.workers.factory import create_celery_app
+from app.workers.orchestration import RECONCILE_TASK_NAME
 from app.workers.tasks import PING_TASK_NAME
 
 
 class TaskQueue(Protocol):
     def enqueue_ping(self) -> UUID: ...
+    def enqueue_execution(self, execution_id: UUID) -> None: ...
     def inspect(self, task_id: UUID) -> TaskState: ...
 
 
@@ -25,6 +27,11 @@ class CeleryTaskQueue:
     def enqueue_ping(self) -> UUID:
         result = self.application.send_task(PING_TASK_NAME)
         return UUID(str(result.id))
+
+    def enqueue_execution(self, execution_id: UUID) -> None:
+        self.application.send_task(
+            RECONCILE_TASK_NAME, args=[str(execution_id)], queue="orchestration"
+        )
 
     def inspect(self, task_id: UUID) -> TaskState:
         metadata = self.application.backend.get_task_meta(str(task_id))

@@ -7,6 +7,7 @@ from contextlib import AbstractContextManager, asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.context import router as context_router
+from app.api.executions import router as executions_router
 from app.api.plans import LLMFactory
 from app.api.plans import router as plans_router
 from app.api.repositories import router as repositories_router
@@ -19,6 +20,8 @@ from app.retrieval.hybrid import HybridRetrievalService
 from app.retrieval.vector import VectorRetriever
 from app.services.context_resources import context_resources
 from app.services.context_store import ContextStore
+from app.services.execution_resources import execution_resources
+from app.services.executions import ExecutionService
 from app.services.github_resources import repository_resources
 from app.services.issue_context import IssueContextService
 from app.services.llm_resources import llm_resources
@@ -37,6 +40,7 @@ RetrievalFactory = Callable[[Settings], AbstractContextManager[Retriever | None]
 VectorFactory = Callable[[Settings], AbstractContextManager[VectorRetriever | None]]
 ContextFactory = Callable[[Settings], AbstractContextManager[ContextStore | None]]
 PlanFactory = Callable[[Settings], AbstractContextManager[PlanService | None]]
+ExecutionFactory = Callable[[Settings], AbstractContextManager[ExecutionService | None]]
 
 
 def create_app(
@@ -49,6 +53,7 @@ def create_app(
     context_factory: ContextFactory = context_resources,
     plan_factory: PlanFactory = plan_resources,
     llm_factory: LLMFactory = llm_resources,
+    execution_factory: ExecutionFactory = execution_resources,
 ) -> FastAPI:
     """Build the API; connections are opened on demand by dependency-using routes."""
     configuration = settings if settings is not None else Settings()
@@ -64,8 +69,10 @@ def create_app(
                 vector_factory(configuration) as vector_retriever,
                 context_factory(configuration) as context_store,
                 plan_factory(configuration) as plans,
+                execution_factory(configuration) as executions,
             ):
                 application.state.checks = checks
+                application.state.execution_service = executions
                 application.state.plan_service = plans
                 application.state.llm_factory = llm_factory
                 application.state.task_queue = queue
@@ -94,6 +101,7 @@ def create_app(
                     del application.state.issue_context
                     del application.state.plan_service
                     del application.state.llm_factory
+                    del application.state.execution_service
 
     application = FastAPI(title=configuration.app_name, lifespan=lifespan)
     application.state.settings = configuration
@@ -103,4 +111,5 @@ def create_app(
     application.include_router(search_router)
     application.include_router(context_router)
     application.include_router(plans_router)
+    application.include_router(executions_router)
     return application
