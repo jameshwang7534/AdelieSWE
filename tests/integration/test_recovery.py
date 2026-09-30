@@ -17,11 +17,12 @@ from app.agents.debugging import DebugAgent
 from app.core.config import Settings
 from app.db.session import session_scope
 from app.integrations.llm.fake_provider import FakeLLMProvider
-from app.integrations.llm.provider import LLMError, LLMMessage, LLMResult
+from app.integrations.llm.provider import LLMError, LLMMessage, LLMResult, TokenUsage
 from app.models import AgentRun, TaskExecution
 from app.orchestration.state import InvalidTransition
 from app.sandbox.base import SandboxRequest, SandboxResult
 from app.schemas.testing import RepositoryTestConfig
+from app.schemas.testing import TestReport as ValidationReport
 from app.services.code_patches import CodePatchService
 from app.services.coding import CodingService
 from app.services.coding_records import CodingRecords
@@ -39,6 +40,52 @@ pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_DATABASE_TESTS") != "1", reason="Requires PostgreSQL"
 )
 CONFIG = RepositoryTestConfig(required_commands=("python -m unittest",))
+
+
+def record_state(factory: sessionmaker[Session], task_id: UUID, trace: list[str]) -> None:
+    with session_scope(factory) as session:
+        task = session.get(TaskExecution, task_id)
+        assert task is not None
+        trace.append(f"{task.status}:{task.output_summary}")
+
+
+class TracedTests(Records):
+    def __init__(self, factory: sessionmaker[Session], trace: list[str]) -> None:
+        super().__init__(factory)
+        self.trace = trace
+
+    def finish(
+        self,
+        run_id: UUID,
+        task_id: UUID,
+        agent_id: UUID,
+        report: ValidationReport,
+        error: str | None = None,
+        recovery_id: UUID | None = None,
+    ) -> None:
+        super().finish(run_id, task_id, agent_id, report, error, recovery_id)
+        record_state(self.sessions, task_id, self.trace)
+
+
+class TracedRecovery(RecoveryRecords):
+    def __init__(self, factory: sessionmaker[Session], task_id: UUID, trace: list[str]) -> None:
+        super().__init__(factory)
+        self.task_id, self.trace = task_id, trace
+
+    def finish_debug(
+        self,
+        recovery_id: UUID,
+        agent_id: UUID,
+        metadata: dict[str, object],
+        success: bool,
+        usage: TokenUsage | None,
+    ) -> None:
+        super().finish_debug(recovery_id, agent_id, metadata, success, usage)
+        record_state(self.sessions, self.task_id, self.trace)
+
+    def finish(self, recovery_id: UUID, passed: bool, error: str | None) -> None:
+        super().finish(recovery_id, passed, error)
+        record_state(self.sessions, self.task_id, self.trace)
 
 
 def fix(before: str, after: str) -> str:
@@ -59,7 +106,7 @@ class CheckingSandbox:
         passed = (request.workspace / "hello.txt").read_text() == self.expected + "\n"
         return SandboxResult(
             exit_code=0 if passed else 1,
-            stdout="fixture test output",
+            stdout=f"fixture test output {len(self.calls)}",
             stderr="" if passed else "Expected repaired fixture",
             elapsed_seconds=0.01,
             timed_out=False,
@@ -120,14 +167,15 @@ async def test_bounded_recovery(
         CodingRecords(factory),
         CodePatchService(tmp_path),
     )
+    trace: list[str] = []
     service = RecoveryService(
         settings,
         coding,
-        ValidationService(settings, sandbox, Records(factory)),
+        ValidationService(settings, sandbox, TracedTests(factory, trace)),
         DebugAgent(provider),
-        RecoveryRecords(factory),
+        TracedRecovery(factory, task_id, trace),
     )
-    report = await service.run(run_id, task_id, context, CONFIG)
+    report = await asyncio.wait_for(service.run(run_id, task_id, context, CONFIG), timeout=30)
     passed = case in {"initial-pass", "one-fix", "two-fixes", "corrected", "last-fix"}
     count = {"initial-pass": 0, "one-fix": 1, "two-fixes": 2, "zero-budget": 0, "corrected": 2}.get(
         case, 3
@@ -144,7 +192,9 @@ async def test_bounded_recovery(
             [a for a in records if a.agent_type == "debug"],
             key=lambda a: int(str(a.input_metadata["attempt"])),
         )
-        tests = [a for a in records if a.agent_type == "test"]
+        tests = sorted(
+            [a for a in records if a.agent_type == "test"], key=lambda a: str(a.started_at)
+        )
         parent = next(a for a in records if a.agent_type == "recovery")
         task_record = session.get(TaskExecution, task_id)
         assert task_record is not None and task_record.status == (
@@ -154,6 +204,11 @@ async def test_bounded_recovery(
         assert parent.output_metadata["debug_attempts"] == count
         assert parent.status == ("completed" if passed else "failed")
         assert len(tests) == len(report.tests)
+        assert len(records) == 2 + count + len(tests)
+        assert all(a.completed_at is not None and a.status != "running" for a in records)
+        assert [a.output_metadata["report"] for a in tests] == [
+            result.model_dump(mode="json") for result in report.tests
+        ]
         if case != "initial-pass":
             assert any(a.status == "failed" for a in tests)
         if case == "duplicate":
@@ -163,6 +218,32 @@ async def test_bounded_recovery(
                 "identical_debug_patch",
                 "identical_debug_patch",
             ]
+    failed = "running:recovery_pending"
+    applied = "running:patch_applied_awaiting_validation"
+    tested = "running:recovery_tests_passed"
+    completed = "completed:required_tests_passed"
+    exhausted = "failed:debug_attempts_exhausted"
+    expected = {
+        "one-fix": [failed, applied, tested, completed],
+        "two-fixes": [failed, applied, failed, applied, tested, completed],
+        "exhausted": [failed, applied, failed, applied, failed, applied, failed, exhausted],
+        "duplicate": [failed, applied, failed, failed, failed, exhausted],
+        "malformed": [failed, failed, failed, failed, exhausted],
+    }
+    if case in expected:
+        assert trace == expected[case]
+        expected_tests = {
+            "one-fix": 2,
+            "two-fixes": 3,
+            "exhausted": 4,
+            "duplicate": 2,
+            "malformed": 1,
+        }[case]
+        assert len(sandbox.calls) == len(tests) == expected_tests
+        print(
+            f"AUDIT {case}: debug={count}, tests={len(tests)}, AgentRuns={len(records)}; "
+            + " -> ".join(trace)
+        )
     if count:
         sent = json.loads(provider.calls[0][1].content)
         assert sent["context"]["issue"]["id"] == str(context.issue.id)
