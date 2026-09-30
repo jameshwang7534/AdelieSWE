@@ -29,8 +29,15 @@ class TestService:
                 value = value.replace(secret.get_secret_value(), "[REDACTED]")
         return value[: self.settings.sandbox_output_bytes]
 
-    def run(self, run_id: UUID, task_id: UUID, config: RepositoryTestConfig) -> TestReport:
-        agent_id, inputs = self.records.start(run_id, task_id, config)
+    def run(
+        self,
+        run_id: UUID,
+        task_id: UUID,
+        config: RepositoryTestConfig,
+        *,
+        recovery_id: UUID | None = None,
+    ) -> TestReport:
+        agent_id, inputs = self.records.start(run_id, task_id, config, recovery_id)
         report = TestReport(results=[], passed=False)
         workspace = (
             self.settings.workspace_root / "executions" / str(inputs.repository.id) / str(run_id)
@@ -62,10 +69,10 @@ class TestService:
                         )
                     )
                 report.passed = bool(report.results) and all(r.passed for r in report.results)
-                self.records.finish(run_id, task_id, agent_id, report)
+                self.records.finish(run_id, task_id, agent_id, report, recovery_id=recovery_id)
             return report
         except Exception as error:
             code = str(error) if isinstance(error, TestPolicyError) else "test_execution_failed"
             report.passed = False
-            self.records.finish(run_id, task_id, agent_id, report, code)
+            self.records.finish(run_id, task_id, agent_id, report, code, recovery_id=recovery_id)
             raise TestExecutionError(code) from None

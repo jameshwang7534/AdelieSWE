@@ -61,6 +61,31 @@ class CodePatchService:
             raise PatchError("patch_status_failed", result.stderr)
         return "clean" if not result.stdout.strip() else "modified"
 
+    def current_diff(self, workspace: Path) -> str:
+        """Collect the current full diff, including regular untracked source files."""
+        from app.services.patch_format import validate_path
+
+        tracked = self.git.run(["diff", "--no-ext-diff", "--no-textconv", "HEAD"], workspace)
+        untracked = self.git.run(["ls-files", "--others", "--exclude-standard", "-z"], workspace)
+        if tracked.code or untracked.code:
+            raise PatchError("patch_diff_failed")
+        output = tracked.stdout
+        names = [name for name in untracked.stdout.split("\x00") if name]
+        if len(names) > 50:
+            raise PatchError("patch_diff_too_large")
+        for name in names:
+            validate_path(name)
+            addition = self.git.run(
+                ["diff", "--no-ext-diff", "--no-textconv", "--no-index", "--", os.devnull, name],
+                workspace,
+            )
+            if addition.code not in {0, 1}:
+                raise PatchError("patch_diff_failed", addition.stderr)
+            output += addition.stdout
+            if len(output.encode()) > 1048576:
+                raise PatchError("patch_diff_too_large")
+        return output
+
     def apply(self, workspace: Path, proposal: CodeChangeProposal) -> str:
         validated = CodeChangeProposal.model_validate(proposal.model_dump())
         files = parse_patch(validated.unified_diff, validated.files_changed)

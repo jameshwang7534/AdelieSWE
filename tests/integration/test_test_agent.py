@@ -26,6 +26,7 @@ from app.services.testing import TestService as Service
 from tests.integration.test_coding import setup_run
 from tests.integration.test_database import engine as engine
 from tests.integration.test_database import factory as factory
+from tests.integration.test_sandbox import InspectingCLI
 from tests.unit.test_code_patches import change
 
 pytestmark = pytest.mark.skipif(
@@ -72,7 +73,9 @@ async def test_persisted_test_outcomes(
     scheduler.transition(run_id, other.id, "running")
     scheduler.transition(run_id, other.id, "completed", "fixture verified")
     fake = FakeSandbox([RuntimeError("private diagnostic") if outcome == "error" else result])
-    config = RepositoryTestConfig(required_commands=("sh" if outcome == "policy" else "pytest",))
+    config = RepositoryTestConfig(
+        required_commands=("pytest; echo injected" if outcome == "policy" else "pytest",)
+    )
     service = Service(settings, fake, Records(factory))
     if outcome in {"error", "policy"}:
         with pytest.raises(ExecutionError):
@@ -137,13 +140,15 @@ async def test_all_required_checks_must_pass(
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(os.environ.get("RUN_SANDBOX_TESTS") != "1", reason="Requires Linux Docker")
-@pytest.mark.parametrize("outcome", ["pass", "fail", "timeout"])
+@pytest.mark.parametrize("outcome", ["pass", "fail", "timeout", "missing", "flood"])
 async def test_real_docker_test_agent(
     factory: sessionmaker[Session], tmp_path: Path, local_repository: Path, outcome: str
 ) -> None:
     run_id, task_id, context, workspace = setup_run(factory, tmp_path, local_repository)
     settings = Settings(
-        workspace_root=tmp_path, sandbox_timeout_seconds=1 if outcome == "timeout" else 30
+        workspace_root=tmp_path,
+        sandbox_timeout_seconds=1 if outcome == "timeout" else 30,
+        sandbox_output_bytes=1024,
     )
     await CodingService(
         settings,
@@ -152,25 +157,51 @@ async def test_real_docker_test_agent(
         CodePatchService(tmp_path),
     ).run(run_id, task_id, context)
     body = {
-        "pass": "self.assertEqual(2 + 2, 4)",
+        "pass": "self.assertEqual(sys.platform, 'linux'); self.assertEqual(os.getuid(), 1000)",
         "fail": "self.fail('fixture failure')",
         "timeout": "time.sleep(20)",
+        "missing": "self.fail('Must not run when executable is missing')",
+        "flood": "print('x' * 10000); print('y' * 10000, file=sys.stderr)",
     }[outcome]
     (workspace / "test_fixture.py").write_text(
-        "import unittest, time\nclass Fixture(unittest.TestCase):\n"
+        "import unittest, time, sys, os\nclass Fixture(unittest.TestCase):\n"
         f"    def test_fixture(self):\n        {body}\n",
         encoding="utf-8",
         newline="\n",
     )
-    report = Service(settings, DockerSandbox(settings), Records(factory)).run(
-        run_id, task_id, RepositoryTestConfig(required_commands=("python -m unittest",))
+    runner = InspectingCLI()
+    command = "pytest" if outcome == "missing" else "python -m unittest"
+    report = Service(settings, DockerSandbox(settings, runner), Records(factory)).run(
+        run_id, task_id, RepositoryTestConfig(required_commands=(command,))
     )
-    assert report.passed == (outcome == "pass")
+    assert report.passed == (outcome in {"pass", "flood"})
     assert report.results[0].timeout == (outcome == "timeout")
     if outcome == "pass":
         assert "Ran 1 test" in report.results[0].stderr and "OK" in report.results[0].stderr
     if outcome == "fail":
         assert "fixture failure" in report.results[0].stderr
+    if outcome == "missing":
+        assert report.results[0].exit_code == 127
+        assert "pytest" in report.results[0].stderr
+    if outcome == "flood":
+        assert report.results[0].output_truncated
+        assert len(report.results[0].stdout.encode()) == 1024
+        assert len(report.results[0].stderr.encode()) == 1024
+    assert report.results[0].duration > 0
+    assert len(runner.inspected) == 1
+    metadata = runner.inspected[0]
+    config = metadata["Config"]
+    host = metadata["HostConfig"]
+    assert isinstance(config, dict) and isinstance(host, dict)
+    assert config["Entrypoint"] == ["/usr/bin/env"]
+    assert config["Cmd"][-len(report.results[0].command) :] == list(report.results[0].command)
+    assert config["User"] == "1000:1000" and host["NetworkMode"] == "none"
+    assert not host["Privileged"]
+    assert runner.run(["inspect", runner.names[0]], 5, 1024).code != 0
     with session_scope(factory) as session:
         task = session.get(TaskExecution, task_id)
-        assert task is not None and task.status == ("completed" if outcome == "pass" else "failed")
+        assert task is not None and task.status == ("completed" if report.passed else "failed")
+        agent = session.scalar(select(AgentRun).where(AgentRun.agent_type == "test"))
+        assert agent is not None and agent.completed_at is not None
+        assert agent.output_metadata["report"] == report.model_dump(mode="json")
+        assert agent.status == ("completed" if report.passed else "failed")

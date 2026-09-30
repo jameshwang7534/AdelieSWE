@@ -62,6 +62,12 @@ def test_known_commands(name: str) -> None:
         "pytest\nwhoami",
         "$(whoami)",
         "cargo test --target-dir /host",
+        "pytest | whoami",
+        "pytest > output.txt",
+        "pytest `whoami`",
+        "pytest\x00echo",
+        "cmd /c pytest",
+        "powershell -Command pytest",
     ],
 )
 def test_reject_untrusted_command(name: str) -> None:

@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding proposals, and trusted test execution available.** Coding does not automatically complete tasks; TestAgent requires all configured checks to pass. Automatic agent dispatch, debug/review agents, and the complete issue-to-pull-request workflow remain PLANNED.
+> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding, trusted tests, and bounded debug recovery available.** Tasks succeed only after configured checks pass. Automatic worker dispatch for agents, review agents, and the complete issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -1282,6 +1282,61 @@ $env:RUN_SANDBOX_TESTS = "1"
 python -m pytest tests/integration/test_test_agent.py -q
 ```
 
+## Debugging and bounded recovery (Step 21)
+
+`RecoveryService(settings, coding, tests, debugger, records)` composes the existing
+`CodingService`, `TestService`, the new `DebugAgent(LLMProvider)`, and
+`RecoveryRecords(session_factory)`. Call
+`await service.run(run_id, task_execution_id, issue_context, repository_test_config)`
+after preparing the execution workspace. It accepts a queued task or one whose coding
+patch is awaiting validation; it does not revive previously failed terminal tasks.
+Production TestService uses DockerSandbox; fake providers and sandbox adapters support
+deterministic tests without external LLM calls.
+
+The workflow codes if necessary, runs all required test profiles, and on failure asks
+DebugAgent for another `CodeChangeProposal`. Debug context contains the original issue,
+repository/task metadata, retrieved snippets, current full Git diff (including untracked
+files), failing commands with stdout/stderr, and previous attempt summaries/errors.
+Each failure stream is limited to 4,000 characters in the prompt; total serialized debug
+input is limited to 200,000 characters. Full bounded TestAgent reports remain persisted.
+
+`MAX_RECOVERY_ATTEMPTS` defaults to **3**, accepts 0–10, and counts debug proposals
+separately from the initial coding pass. Zero runs initial tests but disables repairs.
+Every attempt is recorded before contacting the LLM. Provider errors, malformed outputs,
+non-applicable/unsafe patches, and repeated patches consume attempts. An overall
+`LLM_TIMEOUT_SECONDS` deadline bounds each debug proposal, including provider transport
+retries. Those bounded transport retries do not count as additional debug proposals.
+SHA-256 fingerprints reject identical patch text before reapplication, including the
+original coding patch. This detects exact repeats, not every semantically equivalent patch.
+
+Repairs reuse the path, secret-file, Git configuration, locking, and clean-application
+checks from CodingAgent. The same trusted test configuration is rerun after every applied
+repair, so debug output cannot change test commands or skip required checks. A debug agent
+attempt completing means only that its patch was applied. Only passing tests allow final
+task completion. Intermediate failures keep the task running and downstream tasks pending;
+exhausting the budget fails the task and blocks required dependents through the scheduler.
+Standalone TestService retains its previous immediate pass/fail behavior.
+
+Each workflow has a recovery AgentRun containing its immutable limit and required command
+list; each debug/test attempt has a separate AgentRun. Earlier failures are retained.
+Run-row locking and persisted ownership reject duplicate recovery calls, and constructing
+a new service does not replenish the attempt budget. Policy/sandbox infrastructure errors,
+ambiguous patch-application errors, and cancellation end recovery without blind retries.
+Provider errors are recorded using safe codes; credentials are excluded/redacted as in coding.
+
+No new migration, HTTP endpoint, worker dispatch, review agent, or pull-request behavior is
+added. Filesystem and database writes still cannot be one atomic transaction. A process
+crash leaves a claimed attempt requiring inspection/manual recovery; automatic restart
+replay is intentionally not implemented. Passing exit codes do not guarantee meaningful
+tests, and prompt instructions against weakening tests are not a security enforcement layer.
+
+```powershell
+python -m pytest tests/unit/test_recovery_config.py -q
+# Use the existing test database setup; no real LLM key is required.
+$env:RUN_DATABASE_TESTS = "1"
+python -m pytest tests/integration/test_recovery.py -q
+```
+
 ## Current project status
 
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
@@ -1291,7 +1346,8 @@ python -m pytest tests/integration/test_test_agent.py -q
 - **Present:** async structured LLM providers, fake provider, planner agent, and validated draft-plan APIs.
 - **Present:** persisted dependency scheduling and execution state, isolated Docker command sandbox, coding proposals and safe patch application with agent/task audit records.
 - **Present:** deterministic TestAgent command policy, sandboxed required checks, persisted reports, and task completion gated by test results.
-- **PLANNED:** automatic agent dispatch, debug/review agents, recovery loops, complete execution and pull request workflows, and application containers.
+- **Present:** DebugAgent and bounded coding/test recovery with persistent attempt histories and final dependency scheduling.
+- **PLANNED:** automatic agent worker dispatch, review agents, complete execution and pull request workflows, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.
