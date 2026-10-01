@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding, trusted tests, and bounded debug recovery available.** Tasks succeed only after configured checks pass. Automatic worker dispatch for agents, review agents, and the complete issue-to-pull-request workflow remain PLANNED.
+> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding, trusted tests, bounded recovery, and structured review available.** Tasks require passing checks; review approval also requires independent mechanical verification. Automatic agent worker dispatch and the complete issue-to-pull-request workflow remain PLANNED.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -1337,6 +1337,60 @@ $env:RUN_DATABASE_TESTS = "1"
 python -m pytest tests/integration/test_recovery.py -q
 ```
 
+## Accumulated change review (Step 22)
+
+`ReviewAgent(LLMProvider)` reviews the original issue/repository context, immutable execution
+plan snapshot, persisted task outcomes and latest test reports, and the full accumulated Git
+diff. Its prompt checks issue requirements, unrelated changes, passing/missing tests, code
+quality, likely bugs, unsafe behavior, and architecture consistency. Repository text and
+test logs are treated as untrusted evidence. Output is a validated `ReviewResult` with
+`summary`, `approved`, and findings containing severity (`info`, `warning`, or `blocking`),
+repository-relative `file_path`, optional `line`/`reference`, description, and recommendation.
+Global findings may use a null file path. Review does not apply changes or run commands.
+
+Use `ReviewService(settings, ReviewAgent(provider), ReviewRecords(session_factory),
+CodePatchService(settings.workspace_root))` and call
+`await service.run(run_id, issue_context, required_test_config)` after implementation.
+The trusted `RepositoryTestConfig` specifies the required profiles for every task; it must
+come from application/operator policy, not model output. This step supports a common test
+policy across the run. No new HTTP endpoint, migration, worker dispatch, or PR creation is added.
+
+The returned `ReviewDecision` separates the advisory `review` from `mechanical_errors` and
+the final `approved` flag. The orchestration gate requires a completed execution and tasks,
+no active implementation agents, and a valid latest test report for every task. Each report
+must cover exactly the required command profiles, have zero exit codes and no timeouts,
+and refer to that task's latest completed coding/debug attempt. Missing or inconsistent
+evidence blocks review without calling the LLM. An LLM approval with a blocking finding is
+also rejected; model approval never overrides failed mechanical checks.
+
+TestAgent now records a SHA-256 fingerprint of the full workspace diff after test execution.
+Review requires the current diff to match the latest test fingerprint and rejects an empty
+diff. It holds the shared workspace lock, checks again after model generation, and rechecks
+database evidence before persisting approval. Earlier test records without fingerprints
+cannot qualify: use a fresh execution with current test evidence. Existing task/execution
+states and historical records remain unchanged by review. Review AgentRun status `completed`
+means the review operation finished, not that it approved; use the persisted decision.
+
+The service persists decisions, safe provider failure codes, and available token usage.
+Malformed output and timeouts fail closed. Known configured secrets are rejected in review
+input/output. `REVIEW_MAX_INPUT_CHARS` defaults to 200,000 (maximum 2,000,000); oversized
+inputs are rejected, not truncated. The existing Git diff size/file limits also apply.
+The standard `LLM_TIMEOUT_SECONDS` bounds model generation. Tests use FakeLLMProvider,
+temporary Git repositories, and optional PostgreSQL, without a real API key.
+
+Limitations: review targets the current uncommitted execution workspace relative to HEAD;
+the workflow does not create intermediate implementation commits. Approval is evidence for
+that snapshot, not a guarantee about later changes, undiscovered bugs, or test quality.
+Unknown repository secrets cannot be reliably detected. A crash can leave a running review
+requiring manual inspection. A future PR workflow must revalidate the approved snapshot.
+
+```powershell
+python -m pytest tests/unit/test_review.py -q
+$env:RUN_DATABASE_TESTS = "1"
+# Use TEST_DATABASE_URL from the existing local test database setup.
+python -m pytest tests/integration/test_review.py -q
+```
+
 ## Current project status
 
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
@@ -1347,7 +1401,8 @@ python -m pytest tests/integration/test_recovery.py -q
 - **Present:** persisted dependency scheduling and execution state, isolated Docker command sandbox, coding proposals and safe patch application with agent/task audit records.
 - **Present:** deterministic TestAgent command policy, sandboxed required checks, persisted reports, and task completion gated by test results.
 - **Present:** DebugAgent and bounded coding/test recovery with persistent attempt histories and final dependency scheduling.
-- **PLANNED:** automatic agent worker dispatch, review agents, complete execution and pull request workflows, and application containers.
+- **Present:** structured ReviewAgent findings, persisted review decisions, and independent test/provenance/workspace approval gates.
+- **PLANNED:** automatic agent worker dispatch, complete execution and pull request workflows, and application containers.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.

@@ -1,5 +1,6 @@
 """Explicit trusted test execution; no automatic debug, retry, or worker dispatch."""
 
+from hashlib import sha256
 from uuid import UUID
 
 from app.agents.testing import TestAgent, TestPolicyError
@@ -69,7 +70,15 @@ class TestService:
                         )
                     )
                 report.passed = bool(report.results) and all(r.passed for r in report.results)
-                self.records.finish(run_id, task_id, agent_id, report, recovery_id=recovery_id)
+                diff = CodePatchService(self.settings.workspace_root).current_diff(workspace)
+                self.records.finish(
+                    run_id,
+                    task_id,
+                    agent_id,
+                    report,
+                    recovery_id=recovery_id,
+                    workspace_diff_hash=sha256(diff.encode()).hexdigest(),
+                )
             return report
         except Exception as error:
             code = str(error) if isinstance(error, TestPolicyError) else "test_execution_failed"

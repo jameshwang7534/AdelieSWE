@@ -116,6 +116,7 @@ class TestRecords:
         report: TestReport,
         error: str | None = None,
         recovery_id: UUID | None = None,
+        workspace_diff_hash: str | None = None,
     ) -> None:
         with session_scope(self.sessions) as session:
             run, snapshot, tasks = self.execution._load(session, run_id)
@@ -139,7 +140,11 @@ class TestRecords:
                 raise InvalidTransition("recovery_owns_tests")
             agent.status = "completed" if passed else "failed"
             agent.completed_at = datetime.now(UTC)
-            agent.output_metadata = {"report": report.model_dump(mode="json"), "error_code": error}
+            agent.output_metadata = {
+                "report": report.model_dump(mode="json"),
+                "error_code": error,
+                "workspace_diff_hash": workspace_diff_hash,
+            }
             target.status = "completed" if passed else "failed"
             target.output_summary = "required_tests_passed" if passed else "required_tests_failed"
             if recovery:

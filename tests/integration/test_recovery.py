@@ -62,8 +62,9 @@ class TracedTests(Records):
         report: ValidationReport,
         error: str | None = None,
         recovery_id: UUID | None = None,
+        workspace_diff_hash: str | None = None,
     ) -> None:
-        super().finish(run_id, task_id, agent_id, report, error, recovery_id)
+        super().finish(run_id, task_id, agent_id, report, error, recovery_id, workspace_diff_hash)
         record_state(self.sessions, task_id, self.trace)
 
 

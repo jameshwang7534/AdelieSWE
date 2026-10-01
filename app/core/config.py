@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = Field(default=2048, ge=1, le=32768)
     planner_validation_retries: int = Field(default=2, ge=0, le=3)
     max_recovery_attempts: int = Field(default=3, ge=0, le=10)
+    review_max_input_chars: int = Field(default=200000, ge=1000, le=2000000)
     orchestration_recovery_seconds: int = Field(default=30, ge=5, le=3600)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
