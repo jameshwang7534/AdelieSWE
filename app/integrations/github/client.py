@@ -61,6 +61,12 @@ class HttpGitHubClient:
     def _request(
         self, method: str, path: str, payload: dict[str, Any] | None = None
     ) -> dict[str, Any]:
+        data = self._json(method, path, payload)
+        if not isinstance(data, dict):
+            raise GitHubError("github_invalid_response", 502)
+        return data
+
+    def _json(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
         try:
             response = self.client.request(method, path, json=payload)
         except httpx.RequestError:
@@ -91,7 +97,24 @@ class HttpGitHubClient:
             data = response.json()
         except ValueError:
             raise GitHubError("github_invalid_response", 502) from None
-        if not isinstance(data, dict):
+        return data
+
+    def find_pull_requests(
+        self, owner: str, repo: str, *, head: str, base: str
+    ) -> list[dict[str, Any]]:
+        # Include closed/merged PRs: a retry must never open a replacement automatically.
+        query = str(
+            httpx.QueryParams(
+                {
+                    "state": "all",
+                    "head": f"{owner}:{head}",
+                    "base": base,
+                    "per_page": 100,
+                }
+            )
+        )
+        data = self._json("GET", f"{repository_path(owner, repo)}/pulls?{query}")
+        if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
             raise GitHubError("github_invalid_response", 502)
         return data
 

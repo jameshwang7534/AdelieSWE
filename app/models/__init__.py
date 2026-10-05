@@ -3,6 +3,7 @@
 from app.models.execution import AgentRun, ExecutionRun, PullRequest, TaskExecution
 from app.models.planning import ImplementationPlan, PlanTask
 from app.models.repository import CodeChunk, Issue, Repository
+from app.models.workflow import WorkflowRun
 
 __all__ = [
     "AgentRun",
@@ -14,4 +15,5 @@ __all__ = [
     "PullRequest",
     "Repository",
     "TaskExecution",
+    "WorkflowRun",
 ]

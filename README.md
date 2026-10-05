@@ -1,6 +1,6 @@
 # AI Software Engineering Platform
 
-> **Status: API, persistence, Celery tasks, GitHub imports, workspaces, indexing, hybrid retrieval, issue context, draft planning, execution state, Docker sandbox, coding, trusted tests, bounded recovery, and structured review available.** Tasks require passing checks; review approval also requires independent mechanical verification. Automatic agent worker dispatch and the complete issue-to-pull-request workflow remain PLANNED.
+> **Status: the complete issue-to-PR workflow is wired through persisted Celery stages and API monitoring.** Repository synchronization, indexing, retrieval, planning, coding, Docker tests, bounded debugging, review, and optional PR publication are available. Real providers require explicit local configuration; automated tests use fake external providers. Publication requires completed tasks, passing checks, and current review approval.
 
 An AI-powered, multi-agent software engineering platform intended to turn GitHub issues into review-ready pull requests. The planned system will understand a repository, retrieve relevant code with hybrid BM25/vector search, build dependency-aware implementation plans, distribute work to workers, and coordinate coding, testing, debugging, and review in isolated Docker environments.
 
@@ -1391,6 +1391,190 @@ $env:RUN_DATABASE_TESTS = "1"
 python -m pytest tests/integration/test_review.py -q
 ```
 
+## Pull-request publication (Step 23)
+
+Publication is an explicit service operation after review, not an automatic worker or HTTP
+endpoint. Trusted application code can use:
+
+```python
+from app.pull_requests.resources import publication_resources
+
+# This explicitly publishes externally. Use the SAME context and trusted required-test
+# configuration used for review. Do not call from an unapproved integration test.
+with publication_resources(settings) as service:
+    result = service.run(execution_id, issue_context, required_test_config)
+```
+
+`PullRequestService` injects `PublicationGit`, `PublicationGitHub`, and persistence adapters.
+The resource factory supplies `LocalPublicationGit`, the existing httpx GitHub adapter,
+and PostgreSQL sessions. Imports never connect, commit, push, or create a PR.
+
+The service rechecks completed execution/tasks, actual required test results and provenance,
+the latest approved review (including an independent blocking-finding check), and the exact
+nonempty tested/reviewed diff. Disabled required test profiles fail closed. A changed review,
+context, test policy, workspace, or test record requires renewed validation; model approval
+cannot override these gates. Known configured secrets are rejected before committing changes.
+
+The deterministic branch is `ai-platform/issue-{number}-{execution_id.hex}`. The full UUID
+avoids shortened-ID collisions. Git creates a single publication commit and a separate local
+branch ref; it preserves HEAD, the default branch, working files, and the original index.
+This intentionally leaves the reviewed workspace changes visible so retries can revalidate
+the same evidence. Local branches with different contents/parent/identity are rejected.
+Commit attribution uses `GIT_COMMIT_NAME` and `GIT_COMMIT_EMAIL` (safe bot defaults).
+
+Git pushes to the registered repository's validated HTTPS URL, never a workspace-configured
+remote. Authentication uses the existing transient askpass environment, not URL/argv tokens;
+hooks, credential helpers, redirects, and non-HTTPS transports are disabled. An empty expected
+value in `--force-with-lease=refs/heads/{branch}:` is a **create-only** compare-and-swap: no
+existing branch can be overwritten, including during races. The default branch is never a
+publication target. An existing remote branch is reused only at the exact publication commit.
+
+A `pull_request` AgentRun journals branch/commit/review identity and the exact PR title/body
+before external writes. The PR body includes the original issue reference, implementation and
+plan summaries, changed files, test commands/results, review findings/limitations, and execution
+ID. Raw test logs, credentials, and the full diff are not placed in the body. Oversized bodies
+are rejected. The successful PR is stored in the existing uniquely execution-scoped PullRequest
+record; no migration is needed.
+
+On retry, the service reconciles GitHub PRs across **all states**, validates the execution marker,
+head commit, source/target repository, and base branch, and adopts the matching PR. A closed or
+merged PR is not reopened/replaced. Push failures and ambiguous API failures return safe errors
+and can be retried explicitly with the same arguments. If GitHub succeeds but local persistence
+fails, rerunning finds the remote PR and completes local persistence without creating a duplicate.
+There are no blind automatic POST retries. Keep the workspace and database journal for recovery.
+
+All automated publication tests mock GitHub and push. They use real temporary local Git
+repositories and optional PostgreSQL; no GitHub token is required:
+
+```powershell
+python -m pytest tests/unit/test_publication_git.py -q
+$env:RUN_DATABASE_TESTS = "1"
+# Use the documented TEST_DATABASE_URL development setup.
+python -m pytest tests/integration/test_publication.py -q
+```
+
+**Real publication is explicitly opt-in:** no real PR integration test is run by the suite.
+Before choosing to invoke the production service, configure `GITHUB_TOKEN` locally with access
+to the target repository and Contents/Pull requests write permissions; never paste it into chat.
+For Enterprise, set both `GITHUB_API_URL` and `GITHUB_GIT_HOST` to the trusted installation.
+Existing branch protection and organizational approval requirements still apply.
+
+Limitations: publication supports same-repository PRs and the current single baseline/uncommitted
+execution workspace; it does not rebase, resolve remote collisions, merge PRs, or repair deleted
+workspaces automatically. A crash-held workspace lock requires inspection before manual recovery.
+The database, filesystem, and GitHub cannot share an atomic transaction, so recovery uses explicit
+reconciliation. Cooperative workspace locking does not protect against unrelated host processes
+editing files. Passing tests and model review remain evidence for human review, not proof of
+correctness or comprehensive secret detection.
+
+## Complete asynchronous workflow (Step 24)
+
+Use `POST /workflows` to start the complete pipeline, `GET /workflows/{id}` to monitor it,
+and `POST /workflows/{id}/resume` to retry an eligible failed stage. Existing repository,
+issue, plan, and execution APIs retain their prior behavior for manual stage operation;
+the workflow API is the entry point for automatic coordination. The status response contains
+repository/issue/plan/execution IDs as they become available, stage/status, safe error codes,
+attempt count, transition history, and the resulting PR URL. It excludes stored source context.
+Use the returned execution ID with `GET /executions/{id}` for individual task status.
+
+Example request (replace the repository placeholders and generate a request UUID):
+
+```json
+{
+  "request_id": "2b9dfc2a-7b96-4e32-b1db-ef79676ecebf",
+  "github_owner": "YOUR-ORGANIZATION",
+  "github_name": "YOUR_REPOSITORY",
+  "issue_number": 1,
+  "publish_pull_request": false
+}
+```
+
+Reusing the same request ID and identical request returns the same workflow; a conflicting
+request returns HTTP 409. Generate a new UUID for a genuinely new run. Publication defaults
+to **false**: the pipeline stops after approved review. Explicitly set it to **true** when
+starting a workflow to authorize branch push and PR creation in that repository. This value
+cannot be changed on resume. No real publication is performed by the automated tests.
+
+Stages are `repository → sync → index → embed → issue → context → plan → execution → workspace
+→ implement → review → publish → done`. Every completed stage checkpoints its outputs in the
+new `workflow_runs` table (Alembic revision **0005**). Context and trusted test policy are frozen
+for downstream agents. Plan and execution identities are deterministically derived from the
+workflow UUID so a retry after persistence but before checkpointing reuses those records.
+
+The `workflow.advance` task processes one claimed stage. Source/vector indexing uses the
+`indexing` queue; planning, coding/recovery, and review use `agents`; remaining stages use
+`orchestration`. Implementation executes one ready DAG task per delivery through CodingAgent,
+DockerSandbox/TestAgent, and DebugAgent recovery. Downstream dependencies release only after
+required tests pass. Ready tasks within one execution are deliberately serialized because they
+share an accumulated workspace; separate workflow executions can run concurrently. There is
+no concurrent write/merge scheme for independent tasks within the same repository execution.
+
+Workflow state is separate from ExecutionRun task completion. An execution can have completed
+tasks while workflow review/publication is pending or blocked. Rejected review, exhausted debug
+attempts, unsafe state, or revision mismatch blocks publication. The repository revision recorded
+at synchronization must match the execution workspace baseline. No automatic rebase occurs.
+
+`WORKFLOW_REQUIRED_TESTS` is a trusted deployment JSON array of exact TestAgent profiles, frozen
+at workflow start. The default `["python -m unittest"]` is available in the configured Python
+image. Choose tests appropriate to the repository; successful unittest discovery does not prove
+tests exist or provide sufficient coverage. Repository files, API callers, and LLM output cannot
+weaken this policy. Other languages/profiles need preloaded trusted sandbox images containing
+their tools and offline dependencies. No network/package installation is enabled in containers.
+
+Startup from the repository root (after the existing environment configuration):
+
+```powershell
+docker compose up -d --wait --wait-timeout 180
+python -m alembic upgrade head
+python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8000
+# Separate terminal: Windows development uses the solo pool.
+python -m celery -A app.workers.celery_app:app worker --pool=solo -Q orchestration,indexing,agents --loglevel=INFO
+# Separate terminal: recover committed pending work when broker notification was lost.
+python -m celery -A app.workers.celery_app:app beat --loglevel=INFO
+```
+
+The API and all workers must share the same PostgreSQL, Redis configuration, trusted test/image
+policy, provider configuration, and absolute `WORKSPACE_ROOT`. Multi-host workers require a shared
+filesystem with reliable exclusive-file locking; this release is validated on one development
+host. Use FastAPI Swagger/OpenAPI at `/docs`; no frontend is introduced. API authentication and
+tenant authorization remain outside this step: keep the API on loopback/trusted access only.
+
+Worker claims prevent duplicate deliveries from applying the same task twice. A completed stage
+leaves a pending database row before the next queue notification; `workflow.recover` (Celery Beat)
+redispatches pending rows. Queue notification failure therefore does not lose the workflow.
+Resuming `failed` stages is bounded by `WORKFLOW_STAGE_ATTEMPTS` (default 3); debug retries retain
+their independent `MAX_RECOVERY_ATTEMPTS` budget. `blocked` stages require investigation and a new
+execution/workflow rather than blind source patch replay. A worker lease expires after 30 minutes,
+longer than the 960-second task hard limit. Expired implementation/review claims become blocked;
+other interrupted stages become explicitly resumable failures. Inspect crash-held filesystem
+locks before retrying. Windows solo workers do not enforce prefork time limits; a stuck process
+requires operator intervention before recovery, and source-stage locks must not be deleted while
+the original worker is active.
+
+For real runs, configure `LLM_API_KEY`, `LLM_MODEL`, `EMBEDDING_MODEL`, and an appropriate
+`LLM_BASE_URL` locally; private GitHub access/publication also needs the documented `GITHUB_TOKEN`.
+Missing provider configuration fails its stage without exposing credentials. Real external-provider
+validation is not part of automated tests. Never paste credentials into chat or commit `.env`.
+
+Validation with deterministic GitHub/LLM/embedding providers and temporary repositories:
+
+```powershell
+python -m pytest tests/unit/test_workflow.py -q
+$env:RUN_DATABASE_TESTS = "1"
+# TEST_DATABASE_URL must use the existing development PostgreSQL setup.
+python -m pytest tests/integration/test_workflow.py -q
+# Also exercise live Redis/Celery and Docker (trusted Python image must already be present):
+$env:RUN_WORKER_TESTS = "1"
+$env:RUN_SANDBOX_TESTS = "1"
+python -m pytest tests/integration/test_workflow.py::test_api_redis_worker_workflow -q
+```
+
+The live fixture uses real PostgreSQL/Redis, local Git, and restricted Docker containers but mocks
+GitHub publication and model APIs. It verifies a failing test, one debug repair, passing tests,
+dependency release, review, and a single persisted mock PR. Other tests cover disabled publication,
+blocked tests/review, explicit provider-error resume, bounded attempts, stale claims, and replay
+after plan/execution persistence. No real GitHub branch or PR is created.
+
 ## Current project status
 
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
@@ -1402,7 +1586,9 @@ python -m pytest tests/integration/test_review.py -q
 - **Present:** deterministic TestAgent command policy, sandboxed required checks, persisted reports, and task completion gated by test results.
 - **Present:** DebugAgent and bounded coding/test recovery with persistent attempt histories and final dependency scheduling.
 - **Present:** structured ReviewAgent findings, persisted review decisions, and independent test/provenance/workspace approval gates.
-- **PLANNED:** automatic agent worker dispatch, complete execution and pull request workflows, and application containers.
+- **Present:** explicit gated branch/commit/push/PR publication, audit journaling, and retry reconciliation with mocked GitHub tests.
+- **Present:** persisted end-to-end workflow stages, Celery agent dispatch, workflow start/status/resume APIs, and mock-provider/live-infrastructure integration tests.
+- **PLANNED:** application containers and broader production hardening.
 - **Initial interface target:** backend/API access with FastAPI Swagger/OpenAPI documentation; no frontend is required for the first version.
 
 Implementation will proceed one explicitly requested step at a time.

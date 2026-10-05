@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     celery_result_backend: SecretStr | None = None
     github_token: SecretStr | None = None
     github_api_url: str = "https://api.github.com"
+    github_git_host: str = "github.com"
+    git_commit_name: str = Field(default="AI Software Engineering Platform", min_length=1)
+    git_commit_email: str = Field(default="ai-platform@example.invalid", min_length=1)
     llm_api_key: SecretStr | None = None
     llm_base_url: str | None = None
     llm_model: str | None = None
@@ -38,6 +41,10 @@ class Settings(BaseSettings):
     max_recovery_attempts: int = Field(default=3, ge=0, le=10)
     review_max_input_chars: int = Field(default=200000, ge=1000, le=2000000)
     orchestration_recovery_seconds: int = Field(default=30, ge=5, le=3600)
+    workflow_required_tests: tuple[str, ...] = Field(
+        default=("python -m unittest",), min_length=1, max_length=8
+    )
+    workflow_stage_attempts: int = Field(default=3, ge=1, le=10)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)
     embedding_batch_size: int = Field(default=16, ge=1, le=128)

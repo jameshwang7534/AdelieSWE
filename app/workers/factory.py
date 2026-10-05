@@ -13,6 +13,12 @@ from app.workers.orchestration import (
     recover_executions,
 )
 from app.workers.tasks import PING_TASK_NAME, ping
+from app.workers.workflow import (
+    ADVANCE_WORKFLOW,
+    RECOVER_WORKFLOWS,
+    advance_workflow,
+    recover_workflows,
+)
 from app.workers.workspaces import PREPARE_TASK_NAME, prepare_workspace
 
 
@@ -36,14 +42,21 @@ def create_celery_app(settings: Settings) -> Celery:
             EMBED_TASK_NAME: {"queue": "indexing"},
             RECONCILE_TASK_NAME: {"queue": "orchestration"},
             RECOVER_TASK_NAME: {"queue": "orchestration"},
+            ADVANCE_WORKFLOW: {"queue": "orchestration"},
+            RECOVER_WORKFLOWS: {"queue": "orchestration"},
         },
         task_create_missing_queues=False,
         beat_schedule={
+            "recover-workflows": {
+                "task": RECOVER_WORKFLOWS,
+                "schedule": settings.orchestration_recovery_seconds,
+                "options": {"queue": "orchestration"},
+            },
             "recover-executions": {
                 "task": RECOVER_TASK_NAME,
                 "schedule": settings.orchestration_recovery_seconds,
                 "options": {"queue": "orchestration"},
-            }
+            },
         },
         task_serializer="json",
         result_serializer="json",
@@ -115,6 +128,8 @@ def create_celery_app(settings: Settings) -> Celery:
         max_retries=0,
     )(embed_code)
     for name, function in (
+        (ADVANCE_WORKFLOW, advance_workflow),
+        (RECOVER_WORKFLOWS, recover_workflows),
         (RECONCILE_TASK_NAME, reconcile_execution),
         (RECOVER_TASK_NAME, recover_executions),
     ):

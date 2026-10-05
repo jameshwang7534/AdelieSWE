@@ -23,7 +23,7 @@ class ExecutionService:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self.sessions = sessions
 
-    def create(self, plan_id: UUID) -> UUID:
+    def create(self, plan_id: UUID, *, identifier: UUID | None = None) -> UUID:
         with session_scope(self.sessions) as session:
             plan = session.scalar(
                 select(ImplementationPlan).where(ImplementationPlan.id == plan_id).with_for_update()
@@ -59,7 +59,10 @@ class ExecutionService:
                 proposal=proposal, task_ids={task.task_key: task.id for task in tasks}
             )
             run = ExecutionRun(
-                plan_id=plan_id, status="pending", plan_snapshot=snapshot.model_dump(mode="json")
+                id=identifier,
+                plan_id=plan_id,
+                status="pending",
+                plan_snapshot=snapshot.model_dump(mode="json"),
             )
             session.add(run)
             session.flush()

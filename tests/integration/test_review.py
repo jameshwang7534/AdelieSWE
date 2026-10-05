@@ -3,9 +3,11 @@
 import asyncio
 import json
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -14,7 +16,7 @@ from app.agents.review import ReviewAgent
 from app.core.config import Settings
 from app.db.session import session_scope
 from app.integrations.llm.fake_provider import FakeLLMProvider
-from app.integrations.llm.provider import LLMResult
+from app.integrations.llm.provider import LLMError, LLMMessage, LLMResult
 from app.models import AgentRun, PullRequest, TaskExecution
 from app.sandbox.base import SandboxResult
 from app.schemas.review import ReviewDecision, ReviewInput, ReviewResult
@@ -45,9 +47,13 @@ APPROVAL = {"summary": "Issue implemented with passing checks", "approved": True
     "case",
     [
         "approved",
+        "info",
+        "warning",
         "blocking",
         "rejected",
         "malformed",
+        "invalid-schema",
+        "provider-failure",
         "stale",
         "missing-test",
         "failed-test",
@@ -112,10 +118,10 @@ async def test_review_gate_and_persistence(
             assert task_record is not None
             task_record.status = "running"
     output = dict(APPROVAL)
-    if case == "blocking":
+    if case in {"info", "warning", "blocking"}:
         output["findings"] = [
             {
-                "severity": "blocking",
+                "severity": case,
                 "file_path": "hello.txt",
                 "line": 1,
                 "description": "Likely bug",
@@ -125,7 +131,19 @@ async def test_review_gate_and_persistence(
         ]
     if case == "rejected":
         output["approved"] = False
+    if case == "invalid-schema":
+        output["approved"] = "true"
     provider = FakeLLMProvider("invalid JSON" if case == "malformed" else json.dumps(output))
+
+    class UnavailableProvider(FakeLLMProvider):
+        async def generate[T: BaseModel](
+            self, messages: Sequence[LLMMessage], response_model: type[T]
+        ) -> LLMResult[T]:
+            self.calls.append(tuple(messages))
+            raise LLMError("llm_unavailable")
+
+    if case == "provider-failure":
+        provider = UnavailableProvider(json.dumps(output))
 
     class MutatingReviewer(ReviewAgent):
         async def review(self, inputs: ReviewInput) -> LLMResult[ReviewResult]:
@@ -147,17 +165,22 @@ async def test_review_gate_and_persistence(
         else ReviewAgent(provider)
     )
     service = ReviewService(settings, agent, ReviewRecords(factory), CodePatchService(tmp_path))
-    if case in {"malformed", "timeout"}:
-        with pytest.raises(
-            ReviewError, match="llm_timeout" if case == "timeout" else "llm_invalid_response"
-        ):
+    failures = {
+        "malformed": "llm_invalid_response",
+        "invalid-schema": "llm_invalid_response",
+        "provider-failure": "llm_unavailable",
+        "timeout": "llm_timeout",
+    }
+    approved_cases = {"approved", "info", "warning"}
+    if case in failures:
+        with pytest.raises(ReviewError, match=failures[case]):
             await service.run(run_id, context, CONFIG)
     else:
         decision = await service.run(run_id, context, CONFIG)
-        assert decision.approved == (case == "approved")
+        assert decision.approved == (case in approved_cases)
         if case in {"stale", "missing-test", "failed-test", "missing-command", "unfinished"}:
             assert decision.mechanical_errors and provider.calls == []
-        elif case in {"approved", "blocking", "rejected"}:
+        elif case in approved_cases | {"blocking", "rejected"}:
             assert not decision.mechanical_errors and decision.review is not None
             assert decision.review.approved == (case != "rejected")
         if case == "changed-during-review":
@@ -167,10 +190,26 @@ async def test_review_gate_and_persistence(
     with session_scope(factory) as session:
         review = session.scalar(select(AgentRun).where(AgentRun.agent_type == "review"))
         assert review is not None and review.completed_at is not None
-        assert review.status == ("failed" if case in {"malformed", "timeout"} else "completed")
+        assert review.status == ("failed" if case in failures else "completed")
+        assert review.output_metadata["error_code"] == failures.get(case)
         persisted = ReviewDecision.model_validate(review.output_metadata["decision"])
-        assert persisted.approved == (case == "approved")
+        assert persisted.approved == (case in approved_cases)
+        if case in {"info", "warning", "blocking"}:
+            assert persisted.review is not None
+            assert [f.model_dump(mode="json") for f in persisted.review.findings] == output[
+                "findings"
+            ]
+        assert (
+            session.scalar(
+                select(func.count()).select_from(AgentRun).where(AgentRun.agent_type == "review")
+            )
+            == 1
+        )
         assert session.scalar(select(func.count()).select_from(PullRequest)) == 0
+    if case in approved_cases | {"blocking", "rejected"} | failures.keys():
+        execution = scheduler.get(run_id)
+        assert execution.status == "completed"
+        assert all(task.status == "completed" for task in execution.tasks)
     if case == "approved":
         sent = json.loads(provider.calls[0][1].content)
         assert sent["context"]["issue"]["id"] == str(context.issue.id)

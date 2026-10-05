@@ -16,14 +16,22 @@ class PlanService:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self.sessions = sessions
 
-    def create(self, issue_id: UUID, proposal: ImplementationPlanProposal) -> UUID:
+    def create(
+        self,
+        issue_id: UUID,
+        proposal: ImplementationPlanProposal,
+        *,
+        identifier: UUID | None = None,
+    ) -> UUID:
         # Revalidate even objects created through model_construct/model_copy bypasses.
         validated = ImplementationPlanProposal.model_validate(proposal.model_dump())
         tasks = {task.task_key: task for task in validated.tasks}
         with session_scope(self.sessions) as session:
             if session.get(Issue, issue_id) is None:
                 raise RecordNotFound
-            plan = ImplementationPlan(issue_id=issue_id, summary=validated.summary, status="draft")
+            plan = ImplementationPlan(
+                id=identifier, issue_id=issue_id, summary=validated.summary, status="draft"
+            )
             session.add(plan)
             session.flush()
             for sequence, key in enumerate(validated.execution_order()):
