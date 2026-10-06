@@ -32,6 +32,7 @@ def recover_executions() -> dict[str, int]:
         with execution_resources(Settings()) as service:
             if service is None:
                 raise RuntimeError("database_unconfigured")
+            service.recover_stale(Settings().execution_stale_seconds)
             after = None
             while identifiers := service.active_ids(after):
                 for identifier in identifiers:

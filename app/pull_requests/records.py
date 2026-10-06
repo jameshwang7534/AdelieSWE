@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import session_scope
 from app.models import AgentRun, ExecutionRun, Issue, PullRequest, Repository
+from app.orchestration.transitions import agent_state
 from app.pull_requests.contracts import Publication, PublicationError, PublishedPR
 from app.schemas.context import IssueContext
 from app.schemas.review import ReviewDecision
@@ -135,7 +136,8 @@ class PublicationRecords:
             agent = session.get(AgentRun, journal_id)
             if agent is None:
                 raise PublicationError("publication_journal_missing")
-            agent.status, agent.completed_at = "completed", datetime.now(UTC)
+            agent_state(agent, "completed")
+            agent.completed_at = datetime.now(UTC)
             agent.output_metadata = {
                 **agent.output_metadata,
                 "pull_request": remote.model_dump(mode="json"),
@@ -150,5 +152,7 @@ class PublicationRecords:
             # Append safe codes without discarding earlier attempt history.
             history = agent.output_metadata.get("errors", [])
             errors = list(history) if isinstance(history, list) else []
-            agent.status = "failed"
+            # A later remote collision does not undo an already published local record.
+            if agent.status != "completed":
+                agent_state(agent, "failed")
             agent.output_metadata = {**agent.output_metadata, "errors": [*errors, code]}

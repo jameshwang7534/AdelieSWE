@@ -191,11 +191,15 @@ def test_workspace_settings_and_task_registration(
         task = application.tasks[PREPARE_TASK_NAME]
         assert application.conf.task_routes[PREPARE_TASK_NAME] == {"queue": "orchestration"}
         assert task.time_limit == 960
-        with patch("app.services.workspace_sync.prepare_registered_repository") as prepare:
+        with (
+            patch("app.services.workspace_sync.prepare_registered_repository") as prepare,
+            patch("app.orchestration.deliveries.DeliveryRecords.execute") as deliver,
+        ):
+            deliver.side_effect = lambda identifier, name, repository_id, operation: operation()
             with patch("app.db.session.create_database_engine") as engine:
                 prepare.return_value.commit = "abc"
                 result = task.apply(args=[str(uuid4())])
                 assert result.successful() and result.result["commit"] == "abc"
-                engine.return_value.dispose.assert_called_once()
+                assert engine.return_value.dispose.call_count == 2
     finally:
         application.close()

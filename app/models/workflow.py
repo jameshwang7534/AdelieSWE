@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, Integer, String
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,12 +19,14 @@ class WorkflowRun(Record, Base):
     status: Mapped[str] = mapped_column(String(20), default="pending", index=True)
     claim_token: Mapped[UUID | None]
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    generation: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(100))
     __table_args__ = (
         CheckConstraint("attempts >= 0", name="nonnegative_workflow_attempts"),
         CheckConstraint(
-            "status IN ('pending','running','failed','blocked','completed')",
+            "status IN ('pending','running','failed','blocked','completed','cancelled')",
             name="valid_workflow_status",
         ),
     )

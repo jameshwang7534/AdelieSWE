@@ -182,6 +182,7 @@ def test_indexing_through_worker(engine: Engine, tmp_path: Path, local_repositor
     task_ids: list[str] = []
     try:
         with (
+            patch("app.workers.deliveries.Settings", return_value=settings),
             patch("app.workers.indexing.Settings", return_value=settings),
             start_worker(
                 app,

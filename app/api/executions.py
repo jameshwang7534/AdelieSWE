@@ -61,3 +61,15 @@ def get_execution(execution_id: UUID, request: Request) -> ExecutionResponse:
         raise HTTPException(409, detail={"code": "execution_state_invalid"}) from None
     except SQLAlchemyError:
         raise HTTPException(503, detail={"code": "database_unavailable"}) from None
+
+
+@router.post("/executions/{execution_id}/cancel", response_model=ExecutionResponse)
+def cancel_execution(execution_id: UUID, request: Request) -> ExecutionResponse:
+    try:
+        return service_for(request).cancel(execution_id)
+    except RecordNotFound:
+        raise HTTPException(404, detail={"code": "record_not_found"}) from None
+    except (InvalidExecutionPlan, InvalidTransition):
+        raise HTTPException(409, detail={"code": "execution_cancel_not_allowed"}) from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail={"code": "database_unavailable"}) from None

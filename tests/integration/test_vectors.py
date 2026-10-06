@@ -224,6 +224,7 @@ def test_embedding_worker(engine: Engine, tmp_path: Path, local_repository: Path
     tasks: list[str] = []
     try:
         with (
+            patch("app.workers.deliveries.Settings", return_value=settings),
             patch("app.workers.embeddings.Settings", return_value=settings),
             patch("app.services.embedding_resources.embedding_resources", resources),
             start_worker(app, pool="solo", perform_ping_check=False, queues=[queue]),

@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     workflow_required_tests: tuple[str, ...] = Field(
         default=("python -m unittest",), min_length=1, max_length=8
     )
+    workflow_retry_seconds: int = Field(default=30, ge=1, le=3600)
+    execution_stale_seconds: int = Field(default=3600, ge=1800, le=86400)
     workflow_stage_attempts: int = Field(default=3, ge=1, le=10)
     embedding_model: str | None = None
     embedding_dim: int = Field(default=1536, gt=0)

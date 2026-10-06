@@ -1,15 +1,16 @@
 """Transactional orchestration. A run-row lock serializes competing schedulers."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.session import session_scope
-from app.models import ExecutionRun, ImplementationPlan, PlanTask, TaskExecution
+from app.models import AgentRun, ExecutionRun, ImplementationPlan, PlanTask, TaskExecution
 from app.orchestration.state import TERMINAL, InvalidTransition, advance
+from app.orchestration.transitions import agent_state, execution_state, task_state
 from app.schemas.executions import ExecutionResponse, ExecutionSnapshot, TaskExecutionResponse
 from app.schemas.planning import ImplementationPlanProposal, PlanTaskProposal
 from app.services.repositories import RecordNotFound
@@ -102,20 +103,24 @@ class ExecutionService:
     def _advance(
         self, run: ExecutionRun, snapshot: ExecutionSnapshot, tasks: dict[str, TaskExecution]
     ) -> None:
+        if run.status in {"failed", "cancelled"}:
+            return
         states = advance(
             {task.task_key: task.dependencies for task in snapshot.proposal.tasks},
             {key: task.status for key, task in tasks.items()},
         )
         for key, state in states.items():
-            tasks[key].status = state
+            task_state(tasks[key], state)
         if run.started_at is None:
             run.started_at = datetime.now(UTC)
         if all(state in TERMINAL for state in states.values()):
-            run.status = "completed" if all(s == "completed" for s in states.values()) else "failed"
+            execution_state(
+                run, "completed" if all(s == "completed" for s in states.values()) else "failed"
+            )
             if run.completed_at is None:
                 run.completed_at = datetime.now(UTC)
         else:
-            run.status = "running"
+            execution_state(run, "running")
 
     def reconcile(self, run_id: UUID) -> ExecutionResponse:
         with session_scope(self.sessions) as session:
@@ -146,10 +151,100 @@ class ExecutionService:
             expected = "queued" if status == "running" else "running"
             if target.status != expected:
                 raise InvalidTransition("invalid_task_transition")
-            target.status = status
+            task_state(target, status)
             target.output_summary = output_summary[:4000] if output_summary else None
             self._advance(run, snapshot, tasks)
             return True
+
+    def stop_locked(self, session: Session, run_id: UUID, *, cancelled: bool) -> None:
+        """Stop unfinished work atomically; cancellation never races active agent effects."""
+        run, _, tasks = self._load(session, run_id)
+        agents = session.scalars(
+            select(AgentRun).where(
+                AgentRun.execution_run_id == run_id, AgentRun.status == "running"
+            )
+        ).all()
+        if cancelled and (agents or any(t.status == "running" for t in tasks.values())):
+            raise InvalidTransition("execution_busy")
+        if run.status in {"completed", "failed", "cancelled"}:
+            # A review or publication agent may still be running after task completion.
+            if cancelled or not agents:
+                return
+        now = datetime.now(UTC)
+        reason = "execution_cancelled" if cancelled else "worker_interrupted"
+        for agent in agents:
+            agent_state(agent, "failed")
+            agent.completed_at = now
+            agent.output_metadata = {**agent.output_metadata, "error_code": reason}
+        for task in tasks.values():
+            if task.status not in TERMINAL | {"cancelled"}:
+                task_state(
+                    task,
+                    "failed"
+                    if task.status == "running"
+                    else "cancelled"
+                    if cancelled
+                    else "blocked",
+                )
+                task.output_summary = reason
+        if run.status not in {"completed", "failed", "cancelled"}:
+            execution_state(run, "cancelled" if cancelled else "failed")
+            run.completed_at = now
+
+    def cancel(self, run_id: UUID) -> ExecutionResponse:
+        with session_scope(self.sessions) as session:
+            self.stop_locked(session, run_id, cancelled=True)
+        return self.get(run_id)
+
+    def recover_stale(self, seconds: int) -> int:
+        """Fail closed, never replay a possibly applied patch or abandon a live lock."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=seconds)
+        count = 0
+        with session_scope(self.sessions) as session:
+            identifiers = session.scalars(
+                select(ExecutionRun.id)
+                .where(
+                    or_(
+                        and_(
+                            ExecutionRun.status.in_(["pending", "running"]),
+                            ExecutionRun.updated_at < cutoff,
+                        ),
+                        ExecutionRun.id.in_(
+                            select(AgentRun.execution_run_id).where(
+                                AgentRun.status == "running", AgentRun.started_at < cutoff
+                            )
+                        ),
+                    ),
+                )
+                .limit(100)
+                .with_for_update(skip_locked=True)
+            ).all()
+            for identifier in identifiers:
+                _, _, tasks = self._load(session, identifier)
+                stale_agent = session.scalar(
+                    select(AgentRun.id)
+                    .where(
+                        AgentRun.execution_run_id == identifier,
+                        AgentRun.status == "running",
+                        AgentRun.started_at < cutoff,
+                    )
+                    .limit(1)
+                )
+                if not any(t.status == "running" for t in tasks.values()) and stale_agent is None:
+                    continue
+                recent = session.scalar(
+                    select(AgentRun.id)
+                    .where(
+                        AgentRun.execution_run_id == identifier,
+                        AgentRun.status == "running",
+                        AgentRun.started_at >= cutoff,
+                    )
+                    .limit(1)
+                )
+                if recent is None:
+                    self.stop_locked(session, identifier, cancelled=False)
+                    count += 1
+        return count
 
     def get(self, run_id: UUID) -> ExecutionResponse:
         with session_scope(self.sessions) as session:

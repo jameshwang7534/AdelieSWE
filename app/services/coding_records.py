@@ -9,6 +9,7 @@ from app.db.session import session_scope
 from app.integrations.llm.provider import TokenUsage
 from app.models import AgentRun, ImplementationPlan, Issue
 from app.orchestration.state import InvalidTransition
+from app.orchestration.transitions import agent_state, task_state
 from app.schemas.coding import CodingInput, DependencyOutcome
 from app.schemas.context import IssueContext
 from app.services.executions import ExecutionService
@@ -58,7 +59,7 @@ class CodingRecords:
                 ],
                 workspace_status="not_inspected",
             )
-            target.status = "running"
+            task_state(target, "running")
             target.output_summary = "coding_in_progress"
             self.execution._advance(run, snapshot, tasks)
             agent = AgentRun(
@@ -101,7 +102,7 @@ class CodingRecords:
                 or agent.task_execution_id != task_id
             ):
                 raise InvalidTransition("coding_task_state_changed")
-            agent.status = "completed" if success else "failed"
+            agent_state(agent, "completed" if success else "failed")
             agent.completed_at = datetime.now(UTC)
             agent.output_metadata = metadata
             if usage is not None:
@@ -110,5 +111,5 @@ class CodingRecords:
                 "patch_applied_awaiting_validation" if success else "coding_failed"
             )
             if not success:
-                target.status = "failed"
+                task_state(target, "failed")
             self.execution._advance(run, snapshot, tasks)

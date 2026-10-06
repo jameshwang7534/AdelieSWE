@@ -531,7 +531,9 @@ def test_api_redis_worker_workflow(
 
     def enqueue(self: CeleryWorkflowQueue, status: WorkflowStatus) -> None:
         application.send_task(
-            ADVANCE_WORKFLOW, args=[str(status.id), status.stage], queue=queue_name
+            ADVANCE_WORKFLOW,
+            args=[str(status.id), status.stage, status.generation],
+            queue=queue_name,
         )
 
     @contextmanager

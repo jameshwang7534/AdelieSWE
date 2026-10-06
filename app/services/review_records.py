@@ -14,6 +14,7 @@ from app.integrations.llm.provider import TokenUsage
 from app.models import AgentRun, ImplementationPlan, Issue
 from app.orchestration.review_gate import test_evidence
 from app.orchestration.state import InvalidTransition
+from app.orchestration.transitions import agent_state
 from app.schemas.context import IssueContext
 from app.schemas.review import ReviewDecision, ReviewInput
 from app.schemas.testing import RepositoryTestConfig
@@ -133,7 +134,7 @@ class ReviewRecords:
                     "approved": decision.approved and not errors and error is None,
                 }
             )
-            agent.status = "failed" if error else "completed"
+            agent_state(agent, "failed" if error else "completed")
             agent.completed_at = datetime.now(UTC)
             agent.output_metadata = {
                 "decision": decision.model_dump(mode="json"),

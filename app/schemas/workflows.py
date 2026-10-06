@@ -19,6 +19,8 @@ class WorkflowStatus(BaseModel):
     id: UUID
     stage: str
     status: str
+    generation: int = 0
+    retry_at: datetime | None = None
     attempts: int
     error_code: str | None
     repository_id: UUID | None = None

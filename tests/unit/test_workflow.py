@@ -54,7 +54,7 @@ def test_workflow_queue_routing(stage: str, queue: str) -> None:
     )
     CeleryWorkflowQueue(application).enqueue(status)
     application.send_task.assert_called_once_with(
-        ADVANCE_WORKFLOW, args=[str(status.id), stage], queue=queue
+        ADVANCE_WORKFLOW, args=[str(status.id), stage, status.generation], queue=queue
     )
 
 

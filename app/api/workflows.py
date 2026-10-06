@@ -7,6 +7,8 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.orchestration.deliveries import DeliveryRecords
+from app.orchestration.state import InvalidTransition
 from app.orchestration.workflow_records import WorkflowError, WorkflowRecords
 from app.schemas.workflows import WorkflowRequest, WorkflowStatus
 from app.services.repositories import RecordNotFound
@@ -24,7 +26,7 @@ def resources(request: Request) -> tuple[WorkflowRecords, WorkflowQueue]:
 
 
 def wake(queue: WorkflowQueue, status: WorkflowStatus) -> WorkflowStatus:
-    if status.status == "pending":
+    if status.status == "pending" and status.retry_at is None:
         try:
             queue.enqueue(status)
         except Exception:
@@ -63,5 +65,29 @@ def resume_workflow(workflow_id: UUID, request: Request) -> WorkflowStatus:
         raise HTTPException(404, detail={"code": "workflow_not_found"}) from None
     except WorkflowError:
         raise HTTPException(409, detail={"code": "workflow_resume_not_allowed"}) from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail={"code": "database_unavailable"}) from None
+
+
+@router.post("/workflows/{workflow_id}/cancel", response_model=WorkflowStatus)
+def cancel_workflow(workflow_id: UUID, request: Request) -> WorkflowStatus:
+    records, _ = resources(request)
+    try:
+        return records.cancel(workflow_id)
+    except RecordNotFound:
+        raise HTTPException(404, detail={"code": "workflow_not_found"}) from None
+    except (WorkflowError, InvalidTransition):
+        raise HTTPException(409, detail={"code": "workflow_cancel_not_allowed"}) from None
+    except SQLAlchemyError:
+        raise HTTPException(503, detail={"code": "database_unavailable"}) from None
+
+
+@router.get("/worker-deliveries/{delivery_id}")
+def delivery_status(delivery_id: UUID, request: Request) -> dict[str, object]:
+    records, _ = resources(request)
+    try:
+        return DeliveryRecords(records.sessions).get(delivery_id)
+    except RecordNotFound:
+        raise HTTPException(404, detail={"code": "delivery_not_found"}) from None
     except SQLAlchemyError:
         raise HTTPException(503, detail={"code": "database_unavailable"}) from None

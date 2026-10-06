@@ -9,7 +9,9 @@ RECOVER_WORKFLOWS = "workflow.recover"
 logger = logging.getLogger(__name__)
 
 
-def advance_workflow(workflow_id: str, stage: str) -> dict[str, object]:
+def advance_workflow(
+    workflow_id: str, stage: str, generation: int | None = None
+) -> dict[str, object]:
     from app.core.config import Settings
     from app.db.session import create_database_engine, create_session_factory
     from app.orchestration.workflow_resources import workflow_runtime
@@ -23,8 +25,10 @@ def advance_workflow(workflow_id: str, stage: str) -> dict[str, object]:
 
         async def run() -> dict[str, object]:
             async with workflow_runtime(settings, create_session_factory(engine)) as runtime:
-                result = await runtime.advance(UUID(workflow_id), expected_stage=stage)
-            if runtime.did_advance and result.status == "pending":
+                result = await runtime.advance(
+                    UUID(workflow_id), expected_stage=stage, expected_generation=generation
+                )
+            if runtime.did_advance and result.status == "pending" and result.retry_at is None:
                 try:
                     CeleryWorkflowQueue(application).enqueue(result)
                 except Exception:
@@ -50,7 +54,13 @@ def recover_workflows() -> dict[str, int]:
         if resources is None:
             raise RuntimeError("workflow_unconfigured")
         records, queue = resources
+        from app.orchestration.deliveries import DeliveryRecords
+
+        DeliveryRecords(records.sessions).recover_stale()
         for identifier in records.recoverable():
-            queue.enqueue(records.get(identifier))
-            count += 1
+            try:
+                queue.enqueue(records.get(identifier))
+                count += 1
+            except Exception:
+                logger.warning("Workflow recovery notification failed id=%s", identifier)
     return {"dispatched": count}

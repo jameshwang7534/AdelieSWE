@@ -30,7 +30,9 @@ class CeleryWorkflowQueue:
             else "orchestration"
         )
         self.application.send_task(
-            ADVANCE_WORKFLOW, args=[str(workflow.id), workflow.stage], queue=queue
+            ADVANCE_WORKFLOW,
+            args=[str(workflow.id), workflow.stage, workflow.generation],
+            queue=queue,
         )
 
 

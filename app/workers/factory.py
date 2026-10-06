@@ -4,8 +4,9 @@ from celery import Celery
 from kombu import Queue
 
 from app.core.config import Settings
-from app.workers.embeddings import EMBED_TASK_NAME, embed_code
-from app.workers.indexing import INDEX_TASK_NAME, index_code
+from app.workers.deliveries import repository_delivery
+from app.workers.embeddings import EMBED_TASK_NAME
+from app.workers.indexing import INDEX_TASK_NAME
 from app.workers.orchestration import (
     RECONCILE_TASK_NAME,
     RECOVER_TASK_NAME,
@@ -19,7 +20,7 @@ from app.workers.workflow import (
     advance_workflow,
     recover_workflows,
 )
-from app.workers.workspaces import PREPARE_TASK_NAME, prepare_workspace
+from app.workers.workspaces import PREPARE_TASK_NAME
 
 
 def create_celery_app(settings: Settings) -> Celery:
@@ -70,6 +71,7 @@ def create_celery_app(settings: Settings) -> Celery:
         result_expires=3600,
         result_backend_thread_safe=True,
         worker_prefetch_multiplier=1,
+        worker_cancel_long_running_tasks_on_connection_loss=True,
         worker_log_level=settings.log_level,
         worker_log_format="[%(asctime)s: %(levelname)s/%(processName)s] %(message)s",
         worker_task_log_format=(
@@ -109,24 +111,16 @@ def create_celery_app(settings: Settings) -> Celery:
         retry_jitter=True,
         max_retries=3,
     )(ping)
-    application.task(
-        name=PREPARE_TASK_NAME,
-        soft_time_limit=900,
-        time_limit=960,
-        max_retries=0,
-    )(prepare_workspace)
-    application.task(
-        name=INDEX_TASK_NAME,
-        soft_time_limit=900,
-        time_limit=960,
-        max_retries=0,
-    )(index_code)
-    application.task(
-        name=EMBED_TASK_NAME,
-        soft_time_limit=900,
-        time_limit=960,
-        max_retries=0,
-    )(embed_code)
+    for name in (PREPARE_TASK_NAME, INDEX_TASK_NAME, EMBED_TASK_NAME):
+        application.task(
+            bind=True,
+            name=name,
+            acks_late=True,
+            reject_on_worker_lost=True,
+            soft_time_limit=900,
+            time_limit=960,
+            max_retries=0,
+        )(repository_delivery)
     for name, function in (
         (ADVANCE_WORKFLOW, advance_workflow),
         (RECOVER_WORKFLOWS, recover_workflows),

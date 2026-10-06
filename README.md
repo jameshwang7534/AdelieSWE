@@ -1577,6 +1577,12 @@ after plan/execution persistence. No real GitHub branch or PR is created.
 
 ## Current project status
 
+Step 25 adds durable standalone delivery deduplication, generation-fenced workflow messages,
+bounded transient retries, stale execution cleanup, and safe-boundary cancellation APIs.
+See [orchestration reliability](docs/orchestration-reliability.md) for the state/retry policies,
+failure inspection, migration 0006, and operational limits. Configure `WORKFLOW_RETRY_SECONDS`
+and `EXECUTION_STALE_SECONDS` using the safe defaults in `.env.example`.
+
 - **Present:** Settings, health/readiness and diagnostic task APIs, Celery/Redis queues, local infrastructure, nine SQLAlchemy models, sessions/migrations, GitHub repository/issue imports, unit tests, and opt-in database/worker/infrastructure tests.
 - **Present:** managed Git checkout/update/reset, independent execution copies, workspace preparation, and asynchronous scanning/chunk persistence and resumable embedding generation.
 - **Present:** repository-scoped BM25/vector/hybrid search and bounded issue context through GET /issues/{issue_id}/context.

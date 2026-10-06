@@ -547,6 +547,7 @@ def test_workspace_task_through_redis_worker(
     try:
         # Only enable local remotes via the existing injection seam; real task, Git, DB and Redis.
         with (
+            patch("app.workers.deliveries.Settings", return_value=settings),
             patch("app.workers.workspaces.Settings", return_value=settings),
             patch(
                 "app.workers.workspaces.WorkspaceService",

@@ -11,6 +11,7 @@ from app.db.session import session_scope
 from app.integrations.llm.provider import TokenUsage
 from app.models import AgentRun, ImplementationPlan, Issue, TaskExecution
 from app.orchestration.state import InvalidTransition
+from app.orchestration.transitions import agent_state, task_state
 from app.schemas.context import IssueContext
 from app.schemas.debugging import DebugAttempt
 from app.schemas.planning import PlanTaskProposal
@@ -175,7 +176,7 @@ class RecoveryRecords:
             if agent is None or agent.status != "running" or agent.task_execution_id != target.id:
                 raise InvalidTransition("debug_not_running")
             agent.output_metadata.update(metadata)
-            agent.status = "completed" if success else "failed"
+            agent_state(agent, "completed" if success else "failed")
             agent.completed_at = datetime.now(UTC)
             if usage:
                 agent.input_tokens, agent.output_tokens = usage.input_tokens, usage.output_tokens
@@ -190,17 +191,17 @@ class RecoveryRecords:
                 target.status != "running" or target.output_summary != "recovery_tests_passed"
             ):
                 raise InvalidTransition("tests_not_passed")
-            parent.status = "completed" if passed else "failed"
+            agent_state(parent, "completed" if passed else "failed")
             parent.completed_at = datetime.now(UTC)
             parent.output_metadata = {
                 "error": error,
                 "debug_attempts": len(self.attempts(session, recovery_id)),
             }
             if not passed:
-                target.status = "failed"
+                task_state(target, "failed")
                 target.output_summary = error or "recovery_failed"
             else:
-                target.status = "completed"
+                task_state(target, "completed")
                 target.output_summary = "required_tests_passed"
             run, snapshot, tasks = self.execution._load(session, parent.execution_run_id)
             self.execution._advance(run, snapshot, tasks)

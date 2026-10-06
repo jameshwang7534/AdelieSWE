@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.db.session import session_scope
 from app.models import AgentRun, ImplementationPlan, Issue, Repository
 from app.orchestration.state import InvalidTransition
+from app.orchestration.transitions import agent_state, task_state
 from app.schemas.context import ContextRepository
 from app.schemas.testing import RepositoryTestConfig, TestInput, TestReport
 from app.services.executions import ExecutionService
@@ -138,16 +139,17 @@ class TestRecords:
                 recovery_id is not None and recovery is None
             ):
                 raise InvalidTransition("recovery_owns_tests")
-            agent.status = "completed" if passed else "failed"
+            agent_state(agent, "completed" if passed else "failed")
             agent.completed_at = datetime.now(UTC)
             agent.output_metadata = {
                 "report": report.model_dump(mode="json"),
                 "error_code": error,
                 "workspace_diff_hash": workspace_diff_hash,
             }
-            target.status = "completed" if passed else "failed"
+            if not recovery:
+                task_state(target, "completed" if passed else "failed")
             target.output_summary = "required_tests_passed" if passed else "required_tests_failed"
             if recovery:
-                target.status = "running"
+                task_state(target, "running")
                 target.output_summary = "recovery_tests_passed" if passed else "recovery_pending"
             self.execution._advance(run, snapshot, tasks)
