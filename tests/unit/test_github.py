@@ -52,9 +52,10 @@ def test_http_errors(
             assert error.value.retry_after == 12
 
 
-def test_network_failure() -> None:
+@pytest.mark.parametrize("failure", [httpx.ConnectError, httpx.ReadTimeout])
+def test_network_failure(failure: type[httpx.RequestError]) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("secret", request=request)
+        raise failure("secret", request=request)
 
     with httpx.Client(
         base_url="https://github.invalid/", transport=httpx.MockTransport(handler)

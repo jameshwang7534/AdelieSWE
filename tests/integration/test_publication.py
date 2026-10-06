@@ -251,6 +251,18 @@ async def test_publication(
     assert creates == 1
     assert pushes == (2 if case == "push-failure" else 1)
     assert LocalPatchGit().run(["rev-parse", "HEAD"], workspace).stdout == head
+    publication_refs = (
+        LocalPatchGit()
+        .run(["for-each-ref", "--format=%(refname)", "refs/heads/ai-platform/"], workspace)
+        .stdout.splitlines()
+    )
+    assert len(publication_refs) == 1
+    assert (
+        LocalPatchGit()
+        .run(["rev-list", "--count", f"HEAD..{publication_refs[0]}"], workspace)
+        .stdout.strip()
+        == "1"
+    )
     body = prs[0]["body"]
     if case != "pr-collision":
         for value in (
