@@ -36,7 +36,13 @@ namespaces = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--import-mode=importlib", "-ra"]
+addopts = ["--import-mode=importlib", "--strict-markers", "-ra"]
+markers = [
+    "unit: isolated tests without external services",
+    "integration: local database, broker, Git or Docker integration",
+    "e2e: complete workflow with fake external providers",
+    "external: optional real GitHub/LLM service test; requires --run-external",
+]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 

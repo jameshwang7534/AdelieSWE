@@ -6,6 +6,19 @@ An AI-powered, multi-agent software engineering platform intended to turn GitHub
 
 **The first version is backend/API focused.** FastAPI-generated Swagger UI and OpenAPI documentation provide the API exploration interface; a frontend is not required.
 
+## Testing and continuous integration
+
+Tests are organized into `tests/unit`, `tests/integration`, and `tests/e2e`.
+Run `python -m pytest tests/unit -q` for fast checks, or `python -m pytest -q`
+for default discovery with local-service tests skipped unless explicitly enabled.
+[Testing and CI](docs/testing.md) documents exact integration/all-test commands,
+reusable fixtures, coverage, and optional service flags. Normal tests require no external
+API access or GitHub/LLM credentials.
+
+GitHub Actions runs Python 3.12, Ruff, formatting, mypy, unit tests, PostgreSQL/pgvector
+and Redis integration tests, and a bounded Docker fixture workflow on push and pull requests.
+The workflow uses fake external providers and read-only repository permissions.
+
 ## Core goals — PLANNED
 
 - Ground proposed changes in the issue requirements and the repository's actual code and conventions.

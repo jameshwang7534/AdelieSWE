@@ -1,4 +1,4 @@
-"""Inspect emitted JSON during the real Redis/Postgres/Docker fixture workflow."""
+"""Complete workflow acceptance with real local services and fake external providers."""
 
 import io
 import json
