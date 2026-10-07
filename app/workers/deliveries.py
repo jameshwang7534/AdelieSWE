@@ -6,9 +6,11 @@ from uuid import UUID
 from celery import Task
 
 from app.core.config import Settings
+from app.core.timing import observed
 from app.integrations.llm.embeddings import EmbeddingUnconfigured
 
 
+@observed("repository.delivery")
 def repository_delivery(task: Task, repository_id: str) -> dict[str, object]:
     from app.db.session import create_database_engine, create_session_factory
     from app.orchestration.deliveries import DeliveryRecords

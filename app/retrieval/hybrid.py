@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from app.core.timing import observed
 from app.retrieval.base import RankedRetriever
 from app.schemas.search import HybridSearchResult, SearchRequest, SearchResult
 
@@ -20,6 +21,7 @@ class HybridRetrievalService:
         self.bm25, self.vector = bm25, vector
         self.candidate_limit, self.rrf_k = candidate_limit, rrf_k
 
+    @observed("retrieval.hybrid")
     def search(self, repository_id: UUID, query: str, top_k: int = 10) -> list[HybridSearchResult]:
         request = SearchRequest(query=query, top_k=top_k)
         depth = max(self.candidate_limit, request.top_k)

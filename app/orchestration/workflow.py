@@ -3,6 +3,7 @@
 from typing import Protocol
 from uuid import UUID
 
+from app.core.timing import span
 from app.orchestration.failures import SAFE_RETRY_STAGES, provider_failure
 from app.orchestration.workflow_records import WorkflowClaim, WorkflowError, WorkflowRecords
 from app.orchestration.workflow_stages import StageResult
@@ -30,7 +31,8 @@ class WorkflowEngine:
             return self.records.get(identifier)
         self.did_advance = True
         try:
-            result = await self.stages.run(claim)
+            with span("workflow.stage", workflow_id=claim.id, **claim.data):
+                result = await self.stages.run(claim)
         except Exception as error:
             # Expose only fixed workflow/provider codes, never raw external exceptions.
             code, retryable, minimum_delay = provider_failure(error)

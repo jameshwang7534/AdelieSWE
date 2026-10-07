@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.core.observability import context
 from app.db.session import session_scope
 from app.models import WorkflowRun
 from app.orchestration.transitions import workflow_state
@@ -58,7 +59,12 @@ class WorkflowRecords:
                 .values(
                     id=request.request_id,
                     request=payload,
-                    data={"required_commands": list(self.settings.workflow_required_tests)},
+                    data={
+                        "required_commands": list(self.settings.workflow_required_tests),
+                        "correlation_id": context.get().get(
+                            "correlation_id", str(request.request_id)
+                        ),
+                    },
                     history=[],
                     stage="repository",
                     status="pending",
@@ -92,6 +98,7 @@ class WorkflowRecords:
                         for key, value in record.data.items()
                         if key
                         in {
+                            "correlation_id",
                             "repository_id",
                             "issue_id",
                             "plan_id",

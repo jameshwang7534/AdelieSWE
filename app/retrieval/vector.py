@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.timing import observed
 from app.db.session import session_scope
 from app.integrations.llm.embeddings import EmbeddingError, EmbeddingProvider, validate_vectors
 from app.models import CodeChunk, Repository
@@ -19,6 +20,7 @@ class VectorRetriever:
             raise EmbeddingError("embedding_dimension_mismatch")
         self.sessions, self.provider = sessions, provider
 
+    @observed("retrieval.vector")
     def search(self, repository_id: UUID, query: str, top_k: int = 10) -> list[VectorSearchResult]:
         request = SearchRequest(query=query, top_k=top_k)
         filters = (

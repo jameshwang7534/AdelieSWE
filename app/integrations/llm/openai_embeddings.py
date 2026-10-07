@@ -5,6 +5,7 @@ from collections.abc import Callable, Sequence
 
 import httpx
 
+from app.core.timing import observed
 from app.integrations.llm.embeddings import EmbeddingError, profile_id, validate_vectors
 
 
@@ -27,6 +28,7 @@ class OpenAIEmbeddingProvider:
         self.batch_size, self.max_retries = batch_size, max_retries
         self.sleep, self.send_dimensions = sleep, send_dimensions
 
+    @observed("llm.embeddings")
     def embed(self, texts: Sequence[str]) -> list[list[float]]:
         if any(not text.strip() for text in texts):
             raise EmbeddingError("embedding_empty_input")

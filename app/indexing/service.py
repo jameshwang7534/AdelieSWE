@@ -8,6 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, defer, sessionmaker
 
+from app.core.timing import observed
 from app.db.session import session_scope
 from app.indexing.chunking import Chunk, chunk_source
 from app.indexing.scanner import SourceFile
@@ -48,6 +49,7 @@ class IndexingService:
                 raise IndexingError("workspace_not_ready")
             repository.index_status = status
 
+    @observed("indexing.source")
     def index(self, repository_id: UUID) -> dict[str, str | int]:
         # Hold the same filesystem lock as checkout/reset; no database transaction during scanning.
         with self.workspace.locked_repository(repository_id) as root:

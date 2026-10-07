@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable, Sequence
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from app.core.timing import observed
 from app.integrations.llm.provider import LLMError, LLMMessage, LLMResult, TokenUsage, parse_output
 from app.integrations.llm.structured_schema import structured_schema
 
@@ -26,6 +27,7 @@ class OpenAICompatibleLLMProvider:
         self.client, self.model, self.timeout = client, model, timeout
         self.max_retries, self.max_output_tokens, self.sleep = max_retries, max_output_tokens, sleep
 
+    @observed("llm.generate")
     async def generate[T: BaseModel](
         self, messages: Sequence[LLMMessage], response_model: type[T]
     ) -> LLMResult[T]:

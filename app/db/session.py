@@ -7,6 +7,7 @@ from sqlalchemy import Engine, create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
+from app.core.observability import emit
 
 
 def create_database_engine(settings: Settings) -> Engine:
@@ -31,3 +32,5 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
     """Commit on success, rollback on errors, always close; do not share sessions."""
     with factory.begin() as session:
         yield session
+    for fields in session.info.pop("log_transitions", []):
+        emit("state.transition", **fields)

@@ -7,6 +7,7 @@ from time import monotonic
 from uuid import uuid4
 
 from app.core.config import Settings
+from app.core.timing import observed
 from app.sandbox.base import SandboxError, SandboxRequest, SandboxResult
 from app.sandbox.policy import environment_values, workspace_path
 from app.sandbox.runner import DockerCLI, DockerRunner
@@ -28,6 +29,7 @@ class DockerSandbox:
             raise SandboxError("docker_operation_failed")
         return result.stdout.strip()
 
+    @observed("docker.execute")
     def execute(self, request: SandboxRequest) -> SandboxResult:
         started = monotonic()
         settings = self.settings

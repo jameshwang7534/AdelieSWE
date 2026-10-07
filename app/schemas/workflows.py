@@ -19,6 +19,7 @@ class WorkflowStatus(BaseModel):
     id: UUID
     stage: str
     status: str
+    correlation_id: UUID | None = None
     generation: int = 0
     retry_at: datetime | None = None
     attempts: int

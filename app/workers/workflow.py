@@ -4,11 +4,14 @@ import asyncio
 import logging
 from uuid import UUID
 
+from app.core.timing import observed
+
 ADVANCE_WORKFLOW = "workflow.advance"
 RECOVER_WORKFLOWS = "workflow.recover"
 logger = logging.getLogger(__name__)
 
 
+@observed("workflow.delivery")
 def advance_workflow(
     workflow_id: str, stage: str, generation: int | None = None
 ) -> dict[str, object]:

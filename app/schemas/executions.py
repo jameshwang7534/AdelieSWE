@@ -1,10 +1,11 @@
 """Run snapshots and persisted orchestration state returned by the API."""
 
-from datetime import datetime
+from collections import Counter
+from datetime import UTC, datetime
 from typing import Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, computed_field, model_validator
 
 from app.schemas.planning import ImplementationPlanProposal
 
@@ -41,3 +42,15 @@ class ExecutionResponse(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     tasks: list[TaskExecutionResponse]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def elapsed_seconds(self) -> float | None:
+        if self.started_at is None:
+            return None
+        return max(0, ((self.completed_at or datetime.now(UTC)) - self.started_at).total_seconds())
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def task_counts(self) -> dict[str, int]:
+        return dict(Counter(task.status for task in self.tasks))

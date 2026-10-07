@@ -4,6 +4,7 @@ import math
 from collections import Counter
 from uuid import UUID
 
+from app.core.timing import observed
 from app.retrieval.base import ChunkSource
 from app.retrieval.tokenization import tokenize
 from app.schemas.search import SearchRequest, SearchResult
@@ -13,6 +14,7 @@ class BM25Retriever:
     def __init__(self, source: ChunkSource) -> None:
         self.source = source
 
+    @observed("retrieval.bm25")
     def search(self, repository_id: UUID, query: str, top_k: int = 10) -> list[SearchResult]:
         request = SearchRequest(query=query, top_k=top_k)
         documents = self.source.load(repository_id)

@@ -1577,6 +1577,11 @@ after plan/execution persistence. No real GitHub branch or PR is created.
 
 ## Current project status
 
+Step 26 adds self-contained JSON logging, FastAPI request/correlation IDs, Celery
+correlation propagation, operation timings, and committed state-transition events.
+Execution status responses include elapsed time and task counts. See
+[observability](docs/observability.md) for fields, secret handling and validation.
+
 Step 25 adds durable standalone delivery deduplication, generation-fenced workflow messages,
 bounded transient retries, stale execution cleanup, and safe-boundary cancellation APIs.
 See [orchestration reliability](docs/orchestration-reliability.md) for the state/retry policies,

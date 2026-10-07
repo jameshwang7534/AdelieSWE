@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.timing import observed
 from app.db.session import session_scope
 from app.integrations.llm.embeddings import EmbeddingError, EmbeddingProvider, validate_vectors
 from app.models import CodeChunk, Repository
@@ -25,6 +26,7 @@ class EmbeddingService:
         self.sessions, self.workspace, self.provider = sessions, workspace, provider
         self.batch_size = batch_size
 
+    @observed("indexing.embeddings")
     def generate(self, repository_id: UUID) -> dict[str, str | int]:
         with self.workspace.locked_repository(repository_id):
             with session_scope(self.sessions) as session:

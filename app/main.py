@@ -1,12 +1,13 @@
 """FastAPI factory with lifespan-owned dependency clients."""
 
-import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractContextManager, asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
 from app.api.context import router as context_router
+from app.api.correlation import CorrelationMiddleware
 from app.api.executions import router as executions_router
 from app.api.plans import LLMFactory
 from app.api.plans import router as plans_router
@@ -16,6 +17,7 @@ from app.api.status import router
 from app.api.tasks import router as tasks_router
 from app.api.workflows import router as workflows_router
 from app.core.config import Settings
+from app.core.observability import configure
 from app.orchestration.workflow_records import WorkflowRecords
 from app.retrieval.base import Retriever
 from app.retrieval.hybrid import HybridRetrievalService
@@ -67,7 +69,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        logging.getLogger("app").setLevel(configuration.log_level)
+        configure(configuration)
         with resource_factory(configuration) as checks:
             with (
                 queue_factory(configuration) as queue,
@@ -114,6 +116,19 @@ def create_app(
                     del application.state.workflow_resources
 
     application = FastAPI(title=configuration.app_name, lifespan=lifespan)
+    application.add_middleware(CorrelationMiddleware)
+
+    @application.exception_handler(Exception)
+    async def unexpected_error(request: Request, error: Exception) -> JSONResponse:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": {"code": "internal_error"}},
+            headers={
+                "X-Request-ID": request.state.request_id,
+                "X-Correlation-ID": request.state.correlation_id,
+            },
+        )
+
     application.state.settings = configuration
     application.include_router(router)
     application.include_router(tasks_router)

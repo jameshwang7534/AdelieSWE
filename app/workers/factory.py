@@ -24,6 +24,9 @@ from app.workers.workspaces import PREPARE_TASK_NAME
 
 
 def create_celery_app(settings: Settings) -> Celery:
+    from app.workers.observability import install
+
+    install()
     if settings.celery_broker_url is None or settings.celery_result_backend is None:
         raise ValueError("CELERY_BROKER_URL and CELERY_RESULT_BACKEND are required for workers")
     application = Celery(

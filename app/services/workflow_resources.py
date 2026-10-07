@@ -33,6 +33,9 @@ class CeleryWorkflowQueue:
             ADVANCE_WORKFLOW,
             args=[str(workflow.id), workflow.stage, workflow.generation],
             queue=queue,
+            headers={
+                "platform_context": {"correlation_id": str(workflow.correlation_id or workflow.id)}
+            },
         )
 
 
