@@ -132,6 +132,11 @@ Public repository/issue reads may work without a token, subject to GitHub limits
 
 ## Use the API
 
+For a first run **without GitHub/LLM credentials**, follow the
+[credential-free fixture walkthrough](docs/development.md#credential-free-fixture-walkthrough).
+It proves indexing, search and Docker test execution through existing acceptance tests;
+it does not add persistent demo data to the running development API.
+
 Examples below assume the API and workers are running and provider configuration is ready where required. Replace owner/name with a repository you are authorized to use. Real workflow execution sends source context to the configured provider and may incur charges.
 
 ### Full workflow and optional PR

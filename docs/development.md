@@ -7,6 +7,18 @@ You need Python 3.12.x, Git and Docker with Linux containers. Docker Compose v2 
 The host needs access to package/image registries for installation. Tests use local services
 and fake external providers after dependencies and the trusted image are installed.
 
+To obtain a new checkout, copy the platform repository's clone URL from its hosting page
+(without a token in the URL), then run in PowerShell:
+
+```powershell
+$sourceUrl = Read-Host 'Platform repository clone URL'
+git clone $sourceUrl platform
+Set-Location platform
+```
+
+Choose a different destination if `platform` already exists. This is the platform checkout;
+the fixture repositories below are separate temporary repositories created by tests.
+
 **MANUAL ACTION REQUIRED — only when a prerequisite is missing:** install Python 3.12
 and Git on your development computer; install/start Docker Desktop and select Linux
 containers on Windows. Verify in a new terminal with `python --version`, `git --version`,
@@ -91,6 +103,62 @@ Verify `/health`, `/ready`, then POST `/tasks/ping` and GET `/tasks/{task_id}` i
 Expect successful dependency checks and eventual `SUCCESS` with diagnostic metadata.
 An unknown Celery task ID can appear PENDING; it does not prove a task was submitted.
 Persisted workflow/delivery APIs are preferable for durable business progress.
+
+For a copy/paste diagnostic in a fourth activated PowerShell terminal:
+
+```powershell
+$api = 'http://127.0.0.1:8000'
+Invoke-RestMethod "$api/health"
+Invoke-RestMethod "$api/ready"
+$ping = Invoke-RestMethod -Method Post -Uri "$api/tasks/ping"
+Invoke-RestMethod "$api/tasks/$($ping.task_id)"
+```
+
+Repeat the final GET if PENDING or STARTED; expect SUCCESS after the separate worker
+processes the request. A different uvicorn port requires changing `$api` consistently.
+
+## Credential-free fixture walkthrough
+
+Complete the infrastructure, migrations and trusted-image setup above. No GitHub or LLM
+credential is needed for this path. The normal API registers GitHub repositories, not
+arbitrary local clone paths. There is no runtime environment switch for fake providers.
+The existing acceptance tests inject fakes into real services and an in-process FastAPI
+instance. They do not seed permanent demo data into the development database/API.
+
+Stop the separately started development worker and Beat with Ctrl+C before fixture tests;
+keep PostgreSQL/Redis running. Tests manage their own workers and unique queues. In a new
+activated PowerShell terminal at the repository root:
+
+```powershell
+# Capture the checkout's configured URLs without displaying them.
+$env:TEST_DATABASE_URL = python -c "from app.core.config import Settings; s=Settings(); assert s.database_url; print(s.database_url.get_secret_value())"
+$env:CELERY_BROKER_URL = python -c "from app.core.config import Settings; s=Settings(); assert s.celery_broker_url; print(s.celery_broker_url.get_secret_value())"
+$env:CELERY_RESULT_BACKEND = python -c "from app.core.config import Settings; s=Settings(); assert s.celery_result_backend; print(s.celery_result_backend.get_secret_value())"
+$env:RUN_DATABASE_TESTS = '1'
+$env:RUN_WORKER_TESTS = '1'
+$env:RUN_SANDBOX_TESTS = '1'
+python -m pytest tests/integration/test_indexing.py tests/integration/test_bm25.py tests/integration/test_hybrid.py tests/integration/test_test_agent.py tests/e2e -q
+```
+
+The assignments capture subprocess output; do not echo these variables. Test flags and
+TEST_DATABASE_URL must be exported in the shell; pytest does not load them from `.env`.
+Use only a local development/test server whose role can create temporary databases and
+enable pgvector. The Compose development role has those permissions.
+
+Expected: **all selected tests pass, zero skipped**. This sequence proves:
+
+1. Temporary Git repositories are indexed into CodeChunks; repeat/change/delete cases and
+   asynchronous worker indexing work.
+2. BM25 and hybrid HTTP search return ranked, repository-isolated fixture results.
+3. TestAgent runs real Docker success, failure, timeout, missing-command and output-limit
+   scenarios. Intentional failures are expected assertions, not failing tests.
+4. End-to-end acceptance indexes a fixture, retrieves context, plans, codes, tests, repairs
+   one intentional failure, reviews and creates a mocked PR. No real PR is opened.
+
+Each database is uniquely named and dropped by the fixture; repository/workspace paths
+are temporary. Do not run this suite concurrently against the same Redis instance. Close
+the test terminal afterward to clear exported flags/URLs. For a permanent interactive
+repository, use the real GitHub/provider setup below and README workflow commands instead.
 
 ## GitHub and LLM setup
 

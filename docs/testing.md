@@ -62,6 +62,33 @@ Omit RUN_INFRASTRUCTURE_TESTS when using service containers rather than this rep
 Compose configuration. Close the terminal or remove the RUN_* variables to restore
 default skipping. No GITHUB_TOKEN or LLM_API_KEY is required.
 
+## Opt-in scale benchmark
+
+The synthetic benchmark uses real PostgreSQL/pgvector, Git checkouts, source reconciliation,
+embedding batches of 16, BM25 and hybrid retrieval. Embeddings are deterministic test vectors;
+this does not measure model quality or external API latency. Each invocation creates and drops
+its own UUID-named database. `TEST_DATABASE_URL` must point to a local server with CREATEDB
+permission. Set these flags in the terminal (pytest does not load them from `.env`):
+
+```powershell
+$env:TEST_DATABASE_URL='postgresql+psycopg://platform_dev:local-development-only@127.0.0.1:5432/platform_dev'
+$env:RUN_SCALE_BENCHMARK='1'
+$env:BENCHMARK_FILES='1000'
+python -m pytest tests/integration/test_scale_benchmark.py -q -s
+$env:BENCHMARK_FILES='5000'
+python -m pytest tests/integration/test_scale_benchmark.py -q -s
+Remove-Item Env:RUN_SCALE_BENCHMARK
+Remove-Item Env:BENCHMARK_FILES
+```
+
+Each file contains 100 lines. The test checks unchanged chunk identity, 1% modified and 1%
+deleted files, selective re-embedding, and 20 top-10 queries per retrieval method. Budgets are
+300 seconds for initial indexing, 3 seconds query p95, and 1024 MiB peak Python process memory.
+The memory measurement includes pytest, but excludes PostgreSQL and Docker memory. JSON
+measurements are saved to `.pytest_cache/benchmark-{files}.json`, including on budget failure.
+Normal tests and CI skip this benchmark unless explicitly enabled; latency budgets are machine
+dependent. See [benchmark results](benchmark-results.md) for recorded evidence and limitations.
+
 ## Coverage map
 
 | Area | Principal tests |
