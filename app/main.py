@@ -5,10 +5,13 @@ from contextlib import AbstractContextManager, asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.context import router as context_router
 from app.api.correlation import CorrelationMiddleware
 from app.api.executions import router as executions_router
+from app.api.frontend import ASSET_DIRECTORY
+from app.api.frontend import router as frontend_router
 from app.api.plans import LLMFactory
 from app.api.plans import router as plans_router
 from app.api.repositories import router as repositories_router
@@ -138,4 +141,6 @@ def create_app(
     application.include_router(plans_router)
     application.include_router(executions_router)
     application.include_router(workflows_router)
+    application.include_router(frontend_router)
+    application.mount("/assets", StaticFiles(directory=ASSET_DIRECTORY), name="assets")
     return application

@@ -34,6 +34,9 @@ where = ["."]
 include = ["app", "app.*"]
 namespaces = false
 
+[tool.setuptools.package-data]
+app = ["web/*.html", "web/*.css", "web/*.js"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "--strict-markers", "-ra"]

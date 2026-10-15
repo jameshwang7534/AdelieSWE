@@ -2,7 +2,7 @@
 
 A backend/API platform that turns a GitHub issue into a dependency-aware implementation plan, applies focused changes, tests them in isolated Docker containers, attempts bounded repairs, reviews the result, and optionally opens a GitHub pull request.
 
-These stages are implemented. Automated acceptance uses real local PostgreSQL, Redis, Git and Docker with fake GitHub/LLM providers. Passing those tests does not establish that every real provider or repository will work without configuration. The interface is FastAPI Swagger UI at `/docs` and OpenAPI at `/openapi.json`; there is no frontend.
+These stages are implemented. Automated acceptance uses real local PostgreSQL, Redis, Git and Docker with fake GitHub/LLM providers. Passing those tests does not establish that every real provider or repository will work without configuration. An interactive frontend at `/` explains the complete workflow, agent roles, and local setup. It is an educational guide, not a live execution dashboard. FastAPI Swagger UI remains at `/docs` and OpenAPI at `/openapi.json`.
 
 ## Architecture and stack
 
@@ -251,3 +251,9 @@ Default test discovery skips service tests unless enabled. [Testing guide](docs/
 * Passing tests and model approval are evidence, not proof of correctness. No automatic merge, general dependency installation, submodule/LFS content support, or automatic workspace-retention cleanup is provided.
 
 See [security](docs/security.md), [reliability](docs/orchestration-reliability.md), and [observability](docs/observability.md) before operating against real repositories.
+
+## Interactive platform guide
+
+Start FastAPI with the command above, then open http://127.0.0.1:8000/ . Select any of the eight workflow stages or use the previous/next buttons to explore illustrative inputs and outputs. The page also explains the five agent roles, bounded recovery, publication gates, startup commands, and current limitations.
+
+The guide is served directly by FastAPI from `app/web`; it needs no Node.js, build step, external assets, credentials, or additional service. It does not submit workflows or display fabricated live status. Use `/docs` for actual API operations. HTML/CSS/JavaScript assets are included in Python package builds.
